@@ -1,0 +1,17 @@
+{
+  "name": "VITAL triage benchmark",
+  "source": "Prepared PhysioNet/CinC 2019 patient-summary export; raw PSV files are not present in this workspace",
+  "sourceUrl": "https://physionet.org/content/challenge-2019/1.0.0/",
+  "sourceStatus": "prepared_export_raw_missing",
+  "rows": 2500,
+  "labelMapping": "Proxy labels: Emergency for sepsis label or SpO2 <90, pulse >130, or respiration >32; At-Risk for SpO2 <94, pulse >105, temperature >=38.5 C, or respiration >24; otherwise Normal. Raw-data rows missing SpO2, pulse, or respiration are excluded. These are benchmark rules, not clinician-adjudicated outcomes.",
+  "clinicalUse": "Decision-support research prototype only; no prospective clinical validation.",
+  "rawDataPolicy": "Raw MIMIC/PhysioNet clinical files are not committed. Place downloaded files under data/raw to rebuild.",
+  "samplingStrategy": "Deterministic random sample of up to 2,500 patient files (random_state=42) when rebuilt from raw PSV files; current prepared export selection history is not recorded.",
+  "preparedPath": "data/prepared/triage_dataset.csv",
+  "classCounts": {
+    "Normal": 1657,
+    "At-Risk": 527,
+    "Emergency": 316
+  }
+}

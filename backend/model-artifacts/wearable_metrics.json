@@ -1,0 +1,40 @@
+{
+  "benchmark": "PhysioNet wearable device dataset from induced stress and structured exercise sessions",
+  "sourceStatus": "local_public_archive_evaluated",
+  "task": "stress-session versus structured exercise-session proxy classification",
+  "model": "logistic regression using mean HR, HR variability, RMSSD, SDNN, and pNN50",
+  "records": 100,
+  "subjects": 36,
+  "split": "subject-held-out: 27 train subjects, 9 test subjects",
+  "macroF1": 0.778,
+  "stressRecall": 0.7,
+  "confusionMatrix": {
+    "labels": [
+      "exercise",
+      "stress"
+    ],
+    "values": [
+      [
+        7,
+        1
+      ],
+      [
+        3,
+        7
+      ]
+    ]
+  },
+  "features": [
+    "mean_hr",
+    "std_hr",
+    "rmssd_ms",
+    "sdnn_ms",
+    "pnn50_percent"
+  ],
+  "cnnStatus": "not trained; no CNN claim is made in VITAL results",
+  "limitations": [
+    "This is a small session-level proxy benchmark, not a clinical stress diagnosis.",
+    "HRV measures are calculated only from valid 0.3-2.0 second IBI values.",
+    "Wearable values remain separate from VITAL triage until a validated fusion study is completed."
+  ]
+}

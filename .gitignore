@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.py[cod]
+backend/.env
+backend/runtime-data/
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+.gradle-local/
+.gradle-user-home/
+runtime-logs/
+output/
+tmp/

@@ -1,0 +1,31 @@
+{
+  "name": "vital-free-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "backend": "python backend/server.py",
+    "qa": "node scripts/run-qa.cjs",
+    "prepare:data": "python scripts/prepare_triage_dataset.py",
+    "train:model": "python scripts/train_triage_model.py",
+    "evidence:voice": "python scripts/evaluate_voice_distress.py",
+    "evidence:medication": "python scripts/evaluate_medication_vision.py",
+    "deliverables": "node scripts/run-deliverables.cjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^8.0.11"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "playwright": "^1.59.1"
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "modelVersion": "vital-triage-vitals-gb-0.4",
+  "engine": "scikit-learn GradientBoostingClassifier over numeric vital/profile features",
+  "generatedAt": "2026-10-07T17:46:30.176152+00:00",
+  "classes": [
+    "At-Risk",
+    "Emergency",
+    "Normal"
+  ],
+  "rows": 2500,
+  "featurePolicy": "Numeric vital/profile features only; generated case-context text excluded.",
+  "split": {
+    "train": 1875,
+    "test": 625,
+    "strategy": "stratified random split, random_state=42",
+    "evaluationModelFitRows": 1875,
+    "productionModelFitRows": 2500,
+    "testPartitionIncludedInProductionFit": true
+  },
+  "crossValidation": {
+    "strategy": "5-fold stratified CV on the training partition only",
+    "accuracyMean": 0.916,
+    "accuracyStd": 0.006,
+    "macroF1Mean": 0.809,
+    "macroF1Std": 0.015,
+    "balancedAccuracyMean": 0.787,
+    "balancedAccuracyStd": 0.014
+  },
+  "accuracy": 0.915,
+  "balancedAccuracy": 0.781,
+  "macroF1": 0.806,
+  "weightedF1": 0.899,
+  "emergencyRecall": 0.367,
+  "emergencyDetected": 29,
+  "emergencySupport": 79,
+  "emergencyFalseNegativeCount": 50,
+  "emergencyFalseNegativeRate": 0.633,
+  "aurocOvR": 0.892,
+  "brierScore": 0.052,
+  "confusionMatrix": {
+    "labels": [
+      "At-Risk",
+      "Emergency",
+      "Normal"
+    ],
+    "values": [
+      [
+        129,
+        3,
+        0
+      ],
+      [
+        14,
+        29,
+        36
+      ],
+      [
+        0,
+        0,
+        414
+      ]
+    ]
+  },
+  "classificationReport": {
+    "At-Risk": {
+      "precision": 0.9020979020979021,
+      "recall": 0.9772727272727273,
+      "f1-score": 0.9381818181818182,
+      "support": 132.0
+    },
+    "Emergency": {
+      "precision": 0.90625,
+      "recall": 0.3670886075949367,
+      "f1-score": 0.5225225225225225,
+      "support": 79.0
+    },
+    "Normal": {
+      "precision": 0.92,
+      "recall": 1.0,
+      "f1-score": 0.9583333333333334,
+      "support": 414.0
+    },
+    "accuracy": 0.9152,
+    "macro avg": {
+      "precision": 0.9094493006993006,
+      "recall": 0.7814537782892214,
+      "f1-score": 0.8063458913458913,
+      "support": 625.0
+    },
+    "weighted avg": {
+      "precision": 0.9144810769230769,
+      "recall": 0.9152,
+      "f1-score": 0.8989908468468467,
+      "support": 625.0
+    }
+  },
+  "limitations": [
+    "The three VITAL labels are deterministic acuity proxies derived from final PhysioNet vital signs and sepsis labels; they are not original clinician-adjudicated emergency triage outcomes.",
+    "The dataset has no verified patient symptom narratives; generated case-context text is excluded from model training.",
+    "The raw PhysioNet PSV files are not present in this workspace; the current prepared export's original patient sampling history is not recorded.",
+    "Improved held-out benchmark metrics do not establish clinical accuracy or readiness. Emergency recall remains insufficient for clinical use.",
+    "Use a credentialed emergency-department dataset with clinically adjudicated outcomes and prospective review before considering triage-model use."
+  ]
+}

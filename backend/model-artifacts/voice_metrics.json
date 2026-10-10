@@ -1,0 +1,59 @@
+{
+  "benchmark": "RAVDESS Audio Speech",
+  "sourceUrl": "https://zenodo.org/records/1188976",
+  "sourceStatus": "local_public_archive_evaluated",
+  "task": "binary acted-emotion distress proxy: sad, angry, or fearful versus other acted emotions",
+  "model": "logistic regression over six transparent waveform features",
+  "rows": 1440,
+  "split": "actor-held-out: actors 01-18 train, 19-24 test",
+  "macroF1": 0.45,
+  "distressRecall": 0.222,
+  "confusionMatrix": {
+    "labels": [
+      "other",
+      "acted-distress"
+    ],
+    "values": [
+      [
+        152,
+        64
+      ],
+      [
+        112,
+        32
+      ]
+    ]
+  },
+  "classificationReport": {
+    "other": {
+      "precision": 0.5757575757575758,
+      "recall": 0.7037037037037037,
+      "f1-score": 0.6333333333333333,
+      "support": 216.0
+    },
+    "acted-distress": {
+      "precision": 0.3333333333333333,
+      "recall": 0.2222222222222222,
+      "f1-score": 0.26666666666666666,
+      "support": 144.0
+    },
+    "accuracy": 0.5111111111111111,
+    "macro avg": {
+      "precision": 0.4545454545454546,
+      "recall": 0.46296296296296297,
+      "f1-score": 0.44999999999999996,
+      "support": 360.0
+    },
+    "weighted avg": {
+      "precision": 0.4787878787878788,
+      "recall": 0.5111111111111111,
+      "f1-score": 0.48666666666666664,
+      "support": 360.0
+    }
+  },
+  "limitations": [
+    "RAVDESS contains acted speech emotion, not medical distress or emergency calls.",
+    "This model is a reproducible research proxy and is not deployed for clinical decision-making.",
+    "Browser voice support remains a user-triggered accessibility/demo feature."
+  ]
+}

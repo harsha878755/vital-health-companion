@@ -1,0 +1,19 @@
+{
+  "benchmark": "ePillID segmented NIH pill images",
+  "sourceUrl": "https://github.com/usuyama/ePillID-benchmark",
+  "sourceStatus": "local_public_archive_evaluated",
+  "task": "closed-set pill image identification baseline; separate from the VITAL webcam visibility workflow",
+  "model": null,
+  "totalArchiveImages": 25996,
+  "distinctPillLabels": 12998,
+  "classesWithAtLeastTwoImages": 12998,
+  "evaluationStatus": "not_evaluated_two_images_per_label_without_official_split",
+  "macroF1": null,
+  "top1Recognition": null,
+  "limitations": [
+    "This downloaded archive has only two segmented images per pill label and no documented official split, which is insufficient for a robust recognition evaluation.",
+    "A future evaluation must use the official multi-view/split protocol or a separately documented acquisition set.",
+    "The browser workflow reports tablet visibility support, not pill identity or ingestion proof.",
+    "Do not use this result to recommend medication or to make clinical claims."
+  ]
+}

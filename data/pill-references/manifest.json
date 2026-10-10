@@ -1,0 +1,35 @@
+{
+  "datasetName": "VITAL local medicine-training references",
+  "status": "inspected_reference_set; active_demo_classes_are_ParaCIP_and_Celin",
+  "imageCount": 20,
+  "distinctProducts": 3,
+  "classes": [
+    {
+      "label": "Celin 500",
+      "ingredient": "ascorbic acid 500 mg",
+      "visualProfile": "orange/pink round chewable tablet; CELIN imprint visible in p20",
+      "files": ["p1.jpeg", "p2.jpeg", "p3.jpeg", "p9.jpeg", "p16.jpeg", "p20.jpeg"],
+      "activeReference": "public/pill-references/celin500-p20.jpeg"
+    },
+    {
+      "label": "ParaCIP 500",
+      "ingredient": "paracetamol 500 mg",
+      "visualProfile": "white/neutral round scored tablet; blue cast in p19 is lighting; ParaCIP-500 blister text visible",
+      "files": ["p8.jpeg", "p13.jpeg", "p14.jpeg", "p17.jpeg", "p19.jpeg"],
+      "activeReference": "public/pill-references/paracip500-p19.jpeg"
+    },
+    {
+      "label": "Dolo-650",
+      "ingredient": "paracetamol 650 mg",
+      "visualProfile": "blue round tablet; Dolo-650 packaging visible; p19 is a clean bare-tablet shot",
+      "files": ["p4.jpeg", "p5.jpeg", "p6.jpeg", "p7.jpeg", "p10.jpeg", "p11.jpeg", "p12.jpeg", "p15.jpeg", "p18.jpeg"]
+    }
+  ],
+  "qualityNotes": [
+    "Most images are packaging or blister photos rather than isolated tablet images.",
+    "The set is suitable for a demo reference/enrollment flow, not a general medicine classifier.",
+    "Dolo-650 and ParaCIP-500 share paracetamol as an ingredient but differ in strength and packaging.",
+    "No clinical identity or ingestion claim should be made from these images alone."
+  ],
+  "sourceDirectory": "D:/vital-data/medicine training"
+}
