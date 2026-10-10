@@ -3970,12 +3970,23 @@ select:focus {
 .assistant-typing i { width: 0.3rem; height: 0.3rem; border-radius: 50%; background: var(--teal); animation: assistant-pulse 850ms infinite alternate; }
 .assistant-typing i:nth-child(2) { animation-delay: 150ms; }.assistant-typing i:nth-child(3) { animation-delay: 300ms; margin-right: 0.25rem; }
 @keyframes assistant-pulse { to { opacity: 0.3; transform: translateY(-2px); } }
-.assistant-compose { display: flex; align-items: flex-end; gap: 0.5rem; padding: 0.7rem 0.85rem; border-top: 1px solid var(--line); background: var(--panel); }
+.assistant-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.5rem; padding: 0.7rem 0.85rem 0.45rem; border-top: 1px solid var(--line); background: var(--panel); }
 .assistant-compose textarea { flex: 1; max-height: 6rem; min-height: 2.6rem; padding: 0.7rem 0.75rem; resize: vertical; border: 1px solid var(--line); border-radius: 0.8rem; outline: 0; background: var(--bg-elevated); color: var(--ink); font: inherit; font-size: 0.8rem; line-height: 1.4; }
 .assistant-compose textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 14%, transparent); }
-.assistant-compose > button { display: grid; place-items: center; flex: 0 0 auto; width: 2.6rem; height: 2.6rem; border: 0; border-radius: 0.8rem; background: var(--teal-dark); color: #fff; cursor: pointer; }
-.assistant-compose > button:disabled { opacity: 0.45; cursor: not-allowed; }
-.assistant-compose > button svg { width: 1.05rem; height: 1.05rem; }
+.assistant-compose-actions { display: flex; gap: 0.35rem; }
+.assistant-compose-actions button { display: grid; place-items: center; flex: 0 0 auto; width: 2.6rem; height: 2.6rem; border: 1px solid var(--line); border-radius: 0.8rem; background: var(--panel-strong); color: var(--teal-dark); cursor: pointer; transition: transform 150ms ease, background 150ms ease; }
+.assistant-compose-actions button:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--teal) 9%, var(--panel)); }
+.assistant-compose-actions button[type="submit"] { border-color: transparent; background: var(--teal-dark); color: #fff; }
+.assistant-compose-actions button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.assistant-compose-actions button.is-listening { background: #b93227; color: white; animation: assistant-mic-pulse 1s infinite alternate; }
+.assistant-compose-actions button svg { width: 1.05rem; height: 1.05rem; }
+@keyframes assistant-mic-pulse { to { box-shadow: 0 0 0 5px color-mix(in srgb, #b93227 20%, transparent); } }
+.assistant-voice-status { grid-column: 1 / -1; min-height: 1em; color: var(--muted); font-size: 0.63rem; line-height: 1.35; }
+.assistant-header > button[aria-pressed="false"] { opacity: 0.58; }
+.assistant-header .voice-replies-enabled { color: var(--teal-dark); }
+.assistant-header .voice-replies-muted { color: var(--muted); }
+.assistant-listen-message { display: inline-flex; align-items: center; gap: 0.3rem; margin-top: 0.5rem; padding: 0.25rem 0.45rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--teal-dark); font: inherit; font-size: 0.65rem; font-weight: 750; cursor: pointer; }
+.assistant-listen-message svg { width: 0.8rem; height: 0.8rem; }
 .assistant-disclaimer { margin: 0; padding: 0 0.95rem 0.45rem; color: var(--muted); font-size: 0.65rem; line-height: 1.4; }
 .assistant-shortcuts { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0 0.85rem 0.8rem; }
 .assistant-shortcuts button { padding: 0.3rem 0.5rem; border: 0; border-radius: 0.5rem; background: transparent; color: var(--teal-dark); font: inherit; font-size: 0.67rem; font-weight: 750; cursor: pointer; }

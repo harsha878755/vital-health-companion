@@ -139,7 +139,7 @@ type SpeechRecognitionLike = {
   processLocally?: boolean;
   start: () => void;
   stop: () => void;
-  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
+  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onstart: (() => void) | null;
   onend: (() => void) | null;
@@ -1533,10 +1533,120 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(true);
   const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
   const welcome: AssistantMessage = { id: 1, role: "assistant", mode: "here to help", text: "Hi! 👋 I’m VITAL’s health assistant. What would you like help with?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] };
   const [messages, setMessages] = useState<AssistantMessage[]>([welcome]);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const voiceTranscriptRef = useRef("");
+  const voiceQuestionRef = useRef(false);
+  const voiceRepliesEnabledRef = useRef(true);
+  voiceRepliesEnabledRef.current = voiceRepliesEnabled;
+
+  function stopSpeaking() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+  }
+
+  function speakText(text: string) {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      setVoiceStatus("Spoken replies are not supported by this browser. You can still read the text reply.");
+      return;
+    }
+    stopSpeaking();
+    const spokenText = text.replace(/https?:\/\/\S+/g, "link omitted").replace(/\s+/g, " ").trim();
+    if (!spokenText) return;
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = "en-IN";
+    const preferredVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("en-in"))
+      ?? window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("en"));
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.onstart = () => setVoiceStatus("Speaking VITAL’s reply…");
+    utterance.onend = () => setVoiceStatus("");
+    utterance.onerror = () => setVoiceStatus("Could not play the spoken reply. Use the browser’s sound settings or read the text reply.");
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function stopVoiceInput() {
+    voiceQuestionRef.current = false;
+    recognitionRef.current?.stop();
+    setListening(false);
+  }
+
+  function startVoiceInput() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceStatus("Voice input is not supported in this browser. Use the text box or try a current version of Chrome or Edge.");
+      return;
+    }
+    stopSpeaking();
+    voiceTranscriptRef.current = "";
+    voiceQuestionRef.current = true;
+    setVoiceStatus("Requesting microphone access…");
+    const recognition = new Recognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-IN";
+    recognition.onstart = () => {
+      setListening(true);
+      setVoiceStatus("Listening… Speak your question, then pause.");
+    };
+    recognition.onresult = (event) => {
+      const finalParts: string[] = [];
+      const interimParts: string[] = [];
+      Array.from(event.results).forEach((result) => {
+        const transcript = result[0].transcript.trim();
+        if (!transcript) return;
+        (result.isFinal ? finalParts : interimParts).push(transcript);
+      });
+      const finalTranscript = finalParts.join(" ").trim();
+      const combined = [finalTranscript, interimParts.join(" ").trim()].filter(Boolean).join(" ");
+      voiceTranscriptRef.current = finalTranscript || combined;
+      setDraft(combined);
+      if (combined) setVoiceStatus("Speech recognized. Pause to send your question, or tap the microphone to stop.");
+    };
+    recognition.onerror = (event) => {
+      voiceQuestionRef.current = false;
+      setListening(false);
+      const messages: Record<string, string> = {
+        "not-allowed": "Microphone access was denied. Allow microphone access for VITAL in your browser settings, then try again.",
+        "service-not-allowed": "The browser blocked speech recognition. Check browser permissions or type your question instead.",
+        "no-speech": "No speech was detected. Check your microphone and try again.",
+        "audio-capture": "No microphone was found. Connect or enable a microphone, then try again.",
+        network: "The browser speech service is unavailable. Check your connection or type your question instead.",
+        aborted: "Voice input stopped. Tap the microphone to try again."
+      };
+      setVoiceStatus(messages[event.error] || `Voice input failed (${event.error}). You can type your question instead.`);
+    };
+    recognition.onend = () => {
+      setListening(false);
+      const question = voiceTranscriptRef.current.trim();
+      if (voiceQuestionRef.current && question) {
+        voiceQuestionRef.current = false;
+        setVoiceStatus("Sending your spoken question…");
+        void submitQuestion(question, true);
+      } else if (voiceQuestionRef.current) {
+        voiceQuestionRef.current = false;
+        setVoiceStatus("No clear words were captured. Try again or type your question.");
+      }
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      voiceQuestionRef.current = false;
+      setListening(false);
+      setVoiceStatus("Could not start the microphone. Check site permissions and try again.");
+    }
+  }
+
+  useEffect(() => () => {
+    recognitionRef.current?.stop();
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  }, []);
+
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages, open]);
   useEffect(() => {
     let active = true;
@@ -1546,7 +1656,7 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
-  async function submitQuestion(value = draft) {
+  async function submitQuestion(value = draft, fromVoice = false) {
     const question = value.trim();
     if (!question || busy) return;
     setDraft("");
@@ -1567,6 +1677,7 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
       const history = messages.slice(-8).map(({ role, text }) => ({ role, text }));
       const reply = await postHealthQuestion(question, context, history);
       setMessages((items) => [...items, { id: Date.now() + 1, role: "assistant", text: reply.answer, mode: reply.mode, urgent: reply.urgent, suggestions: reply.suggestions }]);
+      if (fromVoice && voiceRepliesEnabledRef.current) speakText(reply.answer);
     } catch {
       setMessages((items) => [...items, {
         id: Date.now() + 1,
@@ -1580,8 +1691,11 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   }
 
   function startNewChat() {
+    stopVoiceInput();
+    stopSpeaking();
     setMessages([{ ...welcome, id: Date.now() }]);
     setDraft("");
+    setVoiceStatus("");
   }
 
   function renderText(text: string) {
@@ -1592,11 +1706,12 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
 
   return <div className="health-assistant">
     {open ? <section className="assistant-panel" aria-label="VITAL health assistant">
-      <header className="assistant-header"><div className="assistant-avatar"><Bot /></div><div><strong>Ask VITAL</strong></div><button type="button" aria-label="Start a new conversation" title="New chat" onClick={startNewChat}><RotateCcw /></button><button type="button" aria-label="Close assistant" onClick={() => setOpen(false)}><X /></button></header>
+      <header className="assistant-header"><div className="assistant-avatar"><Bot /></div><div><strong>Ask VITAL</strong></div><button type="button" aria-label={voiceRepliesEnabled ? "Turn off spoken replies" : "Turn on spoken replies"} aria-pressed={voiceRepliesEnabled} title={voiceRepliesEnabled ? "Spoken replies on" : "Spoken replies off"} onClick={() => { setVoiceRepliesEnabled((enabled) => !enabled); stopSpeaking(); }}><Volume2 className={voiceRepliesEnabled ? "voice-replies-enabled" : "voice-replies-muted"} /></button><button type="button" aria-label="Start a new conversation" title="New chat" onClick={startNewChat}><RotateCcw /></button><button type="button" aria-label="Close assistant" onClick={() => { stopVoiceInput(); stopSpeaking(); setOpen(false); }}><X /></button></header>
       <div className="assistant-messages" ref={listRef} aria-live="polite">
         {messages.map((message) => <article key={message.id} className={`assistant-message ${message.role} ${message.urgent ? "urgent" : ""}`}>
           {message.role === "assistant" ? <span className="assistant-message-label">{message.mode || "VITAL assistant"}</span> : null}
           <p>{renderText(message.text)}</p>
+          {message.role === "assistant" ? <button className="assistant-listen-message" type="button" onClick={() => speakText(message.text)} aria-label="Listen to this reply"><Volume2 /> Listen</button> : null}
           {message.urgent ? <a className="assistant-call" href="tel:112">Call 112</a> : null}
         </article>)}
         {busy ? <div className="assistant-typing" role="status"><i /><i /><i /><span>Preparing an answer…</span></div> : null}
@@ -1605,7 +1720,11 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
       <form className="assistant-compose" onSubmit={(event) => { event.preventDefault(); void submitQuestion(); }}>
         <label className="sr-only" htmlFor="assistant-question">Ask a health question</label>
         <textarea id="assistant-question" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask a health question…" rows={1} maxLength={1500} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitQuestion(); } }} />
-        <button type="submit" aria-label="Send question" disabled={!draft.trim() || busy}><Send /></button>
+        <div className="assistant-compose-actions">
+          <button type="button" className={listening ? "is-listening" : ""} aria-label={listening ? "Stop voice input" : "Ask by voice"} title={listening ? "Stop voice input" : "Ask by voice"} disabled={busy} onClick={() => listening ? stopVoiceInput() : startVoiceInput()}>{listening ? <Square /> : <Mic />}</button>
+          <button type="submit" aria-label="Send question" disabled={!draft.trim() || busy}><Send /></button>
+        </div>
+        {voiceStatus ? <small className="assistant-voice-status" role="status">{voiceStatus}</small> : <small className="assistant-voice-status">Voice recognition is handled by your browser; whether audio stays on-device depends on browser support and settings.</small>}
       </form>
       <p className="assistant-disclaimer">General information only. Not a diagnosis or prescription. For urgent symptoms, call emergency services.</p>
       <div className="assistant-shortcuts"><button type="button" onClick={onAppointment}>Appointments</button><button type="button" onClick={onEmergency}>Emergency help</button></div>

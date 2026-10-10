@@ -30,7 +30,9 @@ For development, run `npm run dev` from this folder and start the local API with
 
 ## Ask VITAL
 
-Select **Ask VITAL** in the lower-right corner from any screen. Ask about the current triage result, readings, medication schedule, or preparing for an appointment. VITAL uses an available local LM Studio/Ollama model when configured; without one, it provides offline help for common questions. Chat messages and the selected current-session context are sent only to the VITAL service running on this computer and are not saved as chat history. No question is sent to a cloud AI service.
+Select **Ask VITAL** in the lower-right corner from any screen. Type a question or select the microphone to dictate it; after you pause, VITAL submits the recognized question. Assistant replies to voice questions are spoken aloud when spoken replies are enabled. Use **Listen** on an assistant message to replay it, or toggle the speaker button in the header to turn automatic spoken replies on or off. Ask about the current triage result, readings, medication schedule, or preparing for an appointment. VITAL uses an available local LM Studio/Ollama model when configured; without one, it provides offline help for common questions. Chat messages and the selected current-session context are sent only to the VITAL service running on this computer and are not saved as chat history. No question is sent to a cloud AI service.
+
+Voice input and speech playback use browser-provided speech APIs. Audio recognition may be processed on-device or by the browser's speech service, depending on browser support and settings; VITAL's local assistant receives the recognized text. Microphone access requires browser permission and a supported browser. If voice input is unavailable, type the question. Spoken replies use the browser/device speech voices and can be replayed from each answer.
 
 To enable open-ended answers, install and run a model in LM Studio or Ollama, then start VITAL. The assistant still provides general information only; it cannot diagnose, prescribe, or contact emergency services. For urgent symptoms in India, call 112.
 
