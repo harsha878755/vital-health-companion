@@ -1571,20 +1571,25 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
 
   function stopVoiceInput() {
     voiceQuestionRef.current = false;
-    recognitionRef.current?.stop();
+    try { recognitionRef.current?.stop(); } catch { /* It may still be setting up. */ }
     setListening(false);
   }
 
-  function startVoiceInput() {
+  async function startVoiceInput() {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
       setVoiceStatus("Voice input is not supported in this browser. Use the text box or try a current version of Chrome or Edge.");
       return;
     }
+    if (typeof window.isSecureContext === "boolean" && !window.isSecureContext) {
+      setVoiceStatus("Microphone access requires a secure page. Open VITAL on this computer at localhost or use an HTTPS address.");
+      return;
+    }
     stopSpeaking();
     voiceTranscriptRef.current = "";
     voiceQuestionRef.current = true;
-    setVoiceStatus("Requesting microphone access…");
+    setListening(true);
+    setVoiceStatus("Preparing speech recognition…");
     const recognition = new Recognition();
     recognition.continuous = false;
     recognition.interimResults = true;
@@ -1615,7 +1620,9 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
         "service-not-allowed": "The browser blocked speech recognition. Check browser permissions or type your question instead.",
         "no-speech": "No speech was detected. Check your microphone and try again.",
         "audio-capture": "No microphone was found. Connect or enable a microphone, then try again.",
-        network: "The browser speech service is unavailable. Check your connection or type your question instead.",
+        network: recognition.processLocally
+          ? "On-device speech recognition could not start. Check that the English speech pack is installed, then retry; you can also use Windows voice typing (Win+H) or type your question."
+          : "The browser speech service is unavailable. Check your connection; if it remains unavailable, use Windows voice typing (Win+H) or type your question.",
         aborted: "Voice input stopped. Tap the microphone to try again."
       };
       setVoiceStatus(messages[event.error] || `Voice input failed (${event.error}). You can type your question instead.`);
@@ -1634,6 +1641,35 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     };
     recognitionRef.current = recognition;
     try {
+      let localSpeechReady = false;
+      if (Recognition.available && Recognition.install && "processLocally" in recognition) {
+        for (const language of ["en-IN", "en-US"]) {
+          if (!voiceQuestionRef.current) return;
+          try {
+            let availability = await Recognition.available({ langs: [language], processLocally: true, quality: "dictation" });
+            if (availability === "unavailable") continue;
+            if (availability === "downloadable") {
+              setVoiceStatus(`Downloading the ${language} on-device speech pack. This is a one-time setup; please keep VITAL online.`);
+              const installed = await Recognition.install({ langs: [language], processLocally: true, quality: "dictation" });
+              if (!voiceQuestionRef.current) return;
+              if (!installed) continue;
+              availability = "available";
+            }
+            if (availability === "available") {
+              recognition.lang = language;
+              recognition.processLocally = true;
+              localSpeechReady = true;
+              break;
+            }
+          } catch {
+            // Use standard browser recognition if the on-device pack is unavailable.
+          }
+        }
+      }
+      if (!voiceQuestionRef.current) return;
+      setVoiceStatus(localSpeechReady
+        ? `Listening on this device (${recognition.lang})… speak your question, then pause.`
+        : "On-device speech is unavailable here. Trying your browser’s speech service; its audio handling follows your browser settings.");
       recognition.start();
     } catch {
       voiceQuestionRef.current = false;
