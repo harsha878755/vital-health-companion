@@ -88,6 +88,10 @@ export async function postHealthQuestion(question: string, context: Record<strin
   return postJson<{ answer: string; urgent: boolean; mode: string; suggestions?: string[] }>("/api/assistant/chat", { question, context, history });
 }
 
+export async function transcribeAssistantVoice(audioBase64: string) {
+  return postJson<{ transcription: string; engine: string }>("/api/assistant/transcribe", { audioBase64 });
+}
+
 export async function postAppointment(appointment: Appointment & { patientPhone?: string; caretakerPhone?: string }) {
   return postJson<Appointment>("/api/appointments", appointment);
 }

@@ -3943,6 +3943,10 @@ select:focus {
 .assistant-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 2.6rem; height: 2.6rem; border: 1px solid color-mix(in srgb, var(--teal) 30%, var(--line)); border-radius: 50%; background: linear-gradient(145deg, #0c756d, #074742); color: white; box-shadow: inset 0 1px 0 rgba(255,255,255,.2); }
 .assistant-avatar svg { width: 1.45rem; height: 1.45rem; stroke-width: 1.9; }
 .assistant-header > div:nth-child(2) { display: grid; gap: 0.12rem; min-width: 0; }
+.assistant-heading { flex: 1 1 auto; }
+.assistant-header .assistant-ai-status { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-ai-status i { flex: 0 0 auto; width: 0.42rem; height: 0.42rem; border-radius: 50%; background: #d9a441; }
+.assistant-ai-status.available i { background: #20bd91; box-shadow: 0 0 0 2px color-mix(in srgb, #20bd91 22%, transparent); }
 .assistant-header strong { color: var(--ink); font-size: 0.95rem; }
 .assistant-header span { color: var(--muted); font-size: 0.68rem; }
 .assistant-header > button { display: grid; place-items: center; margin-left: auto; width: 2rem; height: 2rem; border: 0; border-radius: 0.6rem; background: transparent; color: var(--muted); cursor: pointer; }

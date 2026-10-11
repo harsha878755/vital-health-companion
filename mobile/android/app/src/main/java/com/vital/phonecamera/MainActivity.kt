@@ -34,6 +34,7 @@ import android.widget.LinearLayout
 import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.health.connect.client.HealthConnectClient
@@ -133,25 +134,48 @@ class MainActivity : ComponentActivity() {
     private lateinit var phoneOverviewValue: TextView
     private lateinit var watchOverviewValue: TextView
     private lateinit var cameraOverviewValue: TextView
+    private var homeCheckInStatus: TextView? = null
+    private var homeWeekHistory: LinearLayout? = null
+    private val homeCheckInButtons = mutableListOf<Pair<String, Button>>()
     private lateinit var watchSyncStatusText: TextView
     private lateinit var postureTestText: TextView
     private lateinit var offlinePreviewImage: ImageView
     private lateinit var cameraPreviewImage: ImageView
     private var cameraPreviewBitmap: android.graphics.Bitmap? = null
     private var offlinePreviewBitmap: android.graphics.Bitmap? = null
+    private var fallConfirmationDialog: AlertDialog? = null
     private var cameraFrameReceiverRegistered = false
     private val cameraFrameReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == CameraRelayService.ACTION_POSSIBLE_FALL_CONFIRMED) {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Possible fall detected")
-                    .setMessage("Check the person now if safe. No emergency call has been placed. Open the dialer to call 112?")
-                    .setPositiveButton("Call 112") { _, _ ->
+                fallConfirmationDialog?.dismiss()
+                fallConfirmationDialog = AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Possible fall pattern")
+                    .setMessage("VITAL detected a fall-like movement. If you are okay, tap I'm okay within 10 seconds to cancel the caregiver alert. Otherwise it will be sent automatically. This camera check cannot tell whether you are injured.")
+                    .setPositiveButton("I'm okay") { _, _ ->
+                        startService(Intent(this@MainActivity, CameraRelayService::class.java).setAction(CameraRelayService.ACTION_CANCEL_FALL_ALERT))
+                    }
+                    .setNegativeButton("Send caregiver alert now") { _, _ ->
+                        startService(Intent(this@MainActivity, CameraRelayService::class.java).setAction(CameraRelayService.ACTION_SEND_FALL_ALERT_NOW))
+                    }
+                    .setNeutralButton("Call 112") { _, _ ->
                         startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")))
                     }
-                    .setNegativeButton("Dismiss", null)
-                    .setCancelable(false)
+                    .setCancelable(true)
                     .show()
+                return
+            }
+            if (intent?.action == CameraRelayService.ACTION_POSSIBLE_FALL_CANCELLED) {
+                fallConfirmationDialog?.dismiss()
+                fallConfirmationDialog = null
+                if (::statusText.isInitialized) setStatus("Fall alert cancelled. No caregiver SMS or emergency call was sent.")
+                return
+            }
+            if (intent?.action == CameraRelayService.ACTION_POSSIBLE_FALL_DISPATCHED) {
+                fallConfirmationDialog?.dismiss()
+                fallConfirmationDialog = null
+                val reason = intent.getStringExtra(CameraRelayService.EXTRA_FALL_DISPATCH_REASON) ?: "VITAL is attempting the caregiver alert."
+                if (::statusText.isInitialized) setStatus("$reason SMS delivery is not guaranteed.")
                 return
             }
             val jpeg = intent?.getByteArrayExtra(CameraRelayService.EXTRA_FRAME_JPEG) ?: return
@@ -294,6 +318,105 @@ class MainActivity : ComponentActivity() {
         root.addView(overview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(16) })
         refreshOverview()
 
+        val checkInCard = section("Daily check-in", "A quick note about how you feel today.")
+        val checkInPrompt = TextView(this).apply {
+            text = "How are you feeling?"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#EAF4F8"))
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        checkInCard.addView(checkInPrompt)
+        homeCheckInStatus = TextView(this).apply {
+            textSize = 12f
+            setTextColor(color("#AFC4D1"))
+            setPadding(0, 0, 0, dp(10))
+        }
+        checkInCard.addView(homeCheckInStatus)
+        val checkInOptions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        homeCheckInButtons.clear()
+        listOf("Good", "Okay", "Need support").forEach { feeling ->
+            val button = secondaryButton(feeling) {
+                val currentDate = java.time.LocalDate.now()
+                val today = currentDate.toString()
+                val history = readCheckInHistory()
+                history.put(today, feeling)
+                val oldestDate = currentDate.minusDays(6)
+                history.keys().asSequence().toList().forEach { savedDay ->
+                    val date = runCatching { java.time.LocalDate.parse(savedDay) }.getOrNull()
+                    if (date == null || date.isBefore(oldestDate) || date.isAfter(currentDate)) history.remove(savedDay)
+                }
+                prefs.edit()
+                    .putString("home-checkin-date", today)
+                    .putString("home-checkin-feeling", feeling)
+                    .putString("home-checkin-history", history.toString())
+                    .apply()
+                updateHomeCheckIn()
+                Toast.makeText(this, "Check-in saved: $feeling", Toast.LENGTH_SHORT).show()
+                if (feeling == "Need support") {
+                    startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")))
+                }
+            }.apply { textSize = 12f; minHeight = dp(46); setPadding(dp(5), dp(3), dp(5), dp(3)) }
+            homeCheckInButtons += feeling to button
+            checkInOptions.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (checkInOptions.childCount > 0) marginStart = dp(6)
+            })
+        }
+        checkInCard.addView(checkInOptions, fieldParams())
+        checkInCard.addView(label("YOUR LAST 7 DAYS"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(3)
+            bottomMargin = dp(5)
+        })
+        homeWeekHistory = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(3), 0, dp(8))
+        }
+        checkInCard.addView(homeWeekHistory, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        checkInCard.addView(bodyText("G · Good     O · Okay     ! · Need support     · · No entry"), fieldParams())
+        checkInCard.addView(bodyText("Saved on this phone only. This check-in is not a medical assessment."), fieldParams())
+        root.addView(checkInCard, cardParams())
+        updateHomeCheckIn()
+
+        val tipCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(15), dp(16), dp(15))
+            background = rounded("#153C3F", 18, "#287268")
+        }
+        tipCard.addView(TextView(this).apply {
+            text = "✦"
+            textSize = 23f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#49DDB2"))
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(dp(36), dp(42)).apply { marginEnd = dp(10) })
+        tipCard.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "TODAY'S HEALTH NUDGE"
+                textSize = 10f
+                letterSpacing = .08f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(color("#49DDB2"))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = listOf(
+                    "Make time to pause, stretch, and reset.",
+                    "A steady routine can make room for better self-care.",
+                    "Stay connected with the people who support your wellbeing.",
+                    "Take medicines only as prescribed by your clinician."
+                )[java.time.LocalDate.now().dayOfYear % 4]
+                textSize = 14f
+                setTextColor(color("#E0F0F1"))
+                setPadding(0, dp(4), 0, 0)
+            })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(tipCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
+
         val pairingCard = section("Connect to VITAL", "Use the computer address and one-time code shown on the VITAL dashboard.")
         pairingCard.addView(label("VITAL computer address"))
         pairingCard.addView(addressField, fieldParams())
@@ -348,11 +471,11 @@ class MainActivity : ComponentActivity() {
             cameraPreviewBitmap?.takeIf { !it.isRecycled }?.recycle()
             cameraPreviewBitmap = null
         }, fieldParams())
-        cameraCard.addView(bodyText("Green pose tracking means monitoring. A sustained horizontal torso posture turns red and starts a 4-second stillness check, even if monitoring began while the person was already lying down. Standing up cancels the check. After confirmation, VITAL plays a short siren with the alert notification and attempts the configured caretaker SMS. It never calls an ambulance automatically; Call 112 opens the dialer for a person to confirm."), fieldParams())
+        cameraCard.addView(bodyText("Green tracking means normal monitoring. Simply lying or sleeping in view does not start a fall alert. The system looks for a recent upright posture followed by rapid downward movement and a horizontal torso, then checks for 4 seconds of stillness. Standing up cancels this check. If the pattern persists, VITAL asks the person to confirm they're okay and waits 10 seconds before attempting a caregiver SMS; choose I'm okay to cancel or Send alert now to act immediately. VITAL cannot identify intent and never calls an ambulance automatically."), fieldParams())
         monitorPage.addView(cameraCard, cardParams())
 
-        val testCard = section("Offline posture test", "Analyze a video using the same on-device YOLO model and sustained-posture/stillness checks as live monitoring.")
-        testCard.addView(bodyText("Frames are checked in video-time order. A match is shown as a possible-fall pattern for review; this offline analysis never sends an alert, SMS, or call and cannot determine consciousness."), fieldParams())
+        val testCard = section("Offline posture test", "Analyze a video with the same on-device YOLO rapid-descent and stillness rules used by live monitoring.")
+        testCard.addView(bodyText("The check looks for upright posture followed by a rapid downward transition into a horizontal posture, then sustained stillness. Resting or sleeping without that transition should not trigger a match. This is a movement-pattern heuristic: it cannot infer intent or determine consciousness. Offline analysis never sends an alert, SMS, or call."), fieldParams())
         postureTestText = TextView(this).apply {
             text = "No video analyzed yet."
             textSize = 14f
@@ -444,6 +567,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::phoneOverviewValue.isInitialized) refreshOverview()
+        updateHomeCheckIn()
         if (!cameraFrameReceiverRegistered) {
             ContextCompat.registerReceiver(
                 this,
@@ -451,6 +575,8 @@ class MainActivity : ComponentActivity() {
                 IntentFilter().apply {
                     addAction(CameraRelayService.ACTION_FRAME_UPDATED)
                     addAction(CameraRelayService.ACTION_POSSIBLE_FALL_CONFIRMED)
+                    addAction(CameraRelayService.ACTION_POSSIBLE_FALL_CANCELLED)
+                    addAction(CameraRelayService.ACTION_POSSIBLE_FALL_DISPATCHED)
                 },
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
@@ -990,13 +1116,13 @@ class MainActivity : ComponentActivity() {
             }
 
             val result = if (possibleFallAtMs != null) {
-                "Possible-fall pattern matched near ${possibleFallAtMs!! / 1_000}s using the live YOLO posture and stillness checks. Review the highlighted frames; this cannot determine consciousness. No alert, SMS, or call was made."
+                "A rapid upright-to-horizontal descent followed by stillness matched the possible-fall rule near ${possibleFallAtMs!! / 1_000}s. Review the highlighted frames. A deliberate staged fall can look the same to this camera-only model. No alert, SMS, or call was made."
             } else if (sawHorizontalPosture) {
-                "Horizontal posture was detected, but the live stillness check did not confirm a possible-fall pattern in this clip. This cannot determine consciousness. No alert, SMS, or call was made."
+                "Horizontal/resting posture was detected without a confirmed rapid upright-to-horizontal descent followed by stillness. This does not rule out a real fall; the camera cannot infer intent. No alert, SMS, or call was made."
             } else if (usableFrames == 0) {
                 "The YOLO model could not find a clear person pose. Try a brighter clip with the person's full body visible. No alert, SMS, or call was made."
             } else {
-                "No sustained horizontal posture was confirmed in $usableFrames sampled frames. This does not rule out a fall or unconsciousness. No alert, SMS, or call was made."
+                "No possible-fall movement sequence was confirmed in $usableFrames sampled frames. This does not rule out a fall or unconsciousness. No alert, SMS, or call was made."
             }
             runOnUiThread {
                 postureTestText.text = result
@@ -1051,7 +1177,8 @@ class MainActivity : ComponentActivity() {
     }
     private fun refreshOverview() {
         if (!::phoneOverviewValue.isInitialized) return
-        phoneOverviewValue.text = if (prefs.getString("token", null).isNullOrBlank()) "Not paired" else "Paired"
+        val paired = !prefs.getString("token", null).isNullOrBlank()
+        phoneOverviewValue.text = if (paired) "Paired" else "Not paired"
         watchOverviewValue.text = when {
             Build.VERSION.SDK_INT < 26 -> "Unavailable"
             HealthConnectClient.getSdkStatus(this) == HealthConnectClient.SDK_AVAILABLE -> "Available"
@@ -1063,6 +1190,88 @@ class MainActivity : ComponentActivity() {
             else -> "Ready to start"
         }
     }
+    private fun updateHomeCheckIn() {
+        val currentDate = java.time.LocalDate.now()
+        val today = currentDate.toString()
+        val savedDate = prefs.getString("home-checkin-date", "")
+        val feeling = prefs.getString("home-checkin-feeling", "")
+        homeCheckInStatus?.text = if (savedDate == today && !feeling.isNullOrBlank()) {
+            "Saved today · You’re feeling $feeling"
+        } else {
+            "No check-in saved today"
+        }
+        homeCheckInButtons.forEach { (option, button) ->
+            val selected = savedDate == today && option == feeling
+            button.background = rippleBackground(
+                if (selected) "#1D514F" else "#24435E",
+                15,
+                if (selected) "#377E77" else "#41637A",
+                if (selected) "#6656E0C1" else "#6649DDB2"
+            )
+            button.setTextColor(color(if (selected) "#79F0CC" else "#D6E6EE"))
+        }
+        val history = readCheckInHistory()
+        // Migrate the prior single-day value into the weekly history.
+        if (!savedDate.isNullOrBlank() && !history.has(savedDate) && !feeling.isNullOrBlank()) {
+            runCatching {
+                java.time.LocalDate.parse(savedDate)
+                history.put(savedDate, feeling)
+                prefs.edit().putString("home-checkin-history", history.toString()).apply()
+            }
+        }
+        homeWeekHistory?.let { row ->
+            row.removeAllViews()
+            val firstDate = currentDate.minusDays(6)
+            for (offset in 0L..6L) {
+                val date = firstDate.plusDays(offset)
+                val savedFeeling = history.optString(date.toString()).takeIf { it.isNotBlank() }
+                val moodColor = when (savedFeeling) {
+                    "Good" -> "#33D3A5"
+                    "Okay" -> "#F0C66A"
+                    "Need support" -> "#FF8279"
+                    else -> "#456177"
+                }
+                val dayColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(2), dp(4), dp(2), dp(4))
+                    addView(TextView(this@MainActivity).apply {
+                        text = date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault()).take(1)
+                        textSize = 10f
+                        gravity = Gravity.CENTER
+                        setTextColor(color("#9FB8C7"))
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = date.dayOfMonth.toString()
+                        textSize = 12f
+                        typeface = Typeface.DEFAULT_BOLD
+                        gravity = Gravity.CENTER
+                        setTextColor(color("#E3EFF4"))
+                        setPadding(0, dp(2), 0, dp(4))
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = when (savedFeeling) {
+                            "Good" -> "G"
+                            "Okay" -> "O"
+                            "Need support" -> "!"
+                            else -> "·"
+                        }
+                        textSize = 12f
+                        typeface = Typeface.DEFAULT_BOLD
+                        gravity = Gravity.CENTER
+                        setTextColor(this@MainActivity.color(if (savedFeeling == null) "#AFC4D1" else "#102331"))
+                        background = rounded(moodColor, 16, moodColor)
+                        minimumWidth = dp(28)
+                        minimumHeight = dp(28)
+                    })
+                }
+                row.addView(dayColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+        }
+    }
+    private fun readCheckInHistory(): JSONObject = runCatching {
+        JSONObject(prefs.getString("home-checkin-history", "{}") ?: "{}")
+    }.getOrElse { JSONObject() }
     private fun setWatchSyncStatus(message: String) {
         if (::watchSyncStatusText.isInitialized) watchSyncStatusText.text = message
     }

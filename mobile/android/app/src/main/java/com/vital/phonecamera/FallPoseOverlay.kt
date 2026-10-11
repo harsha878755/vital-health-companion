@@ -64,7 +64,7 @@ internal object FallPoseOverlay {
                 "fall-verifying" -> "PERSON #1  |  FALL VERIFYING"
                 "possible-fall" -> "PERSON #1  |  POSSIBLE FALL"
                 "horizontal-posture" -> "PERSON #1  |  HORIZONTAL POSTURE"
-                else -> "PERSON #1  |  MONITORING"
+                else -> if (pose.torsoHorizontal) "PERSON #1  |  LYING · NO FALL TRANSITION" else "PERSON #1  |  MONITORING"
             }
             val lineHeight = 18f * scale
             val panelWidth = minOf(bitmap.width - 16f * scale, 270f * scale)
@@ -83,7 +83,7 @@ internal object FallPoseOverlay {
 
         val bannerText = when (phase) {
             "fall-verifying" -> "FALL CHECK · ${formatSeconds(verificationSecondsRemaining)}s · STAND UP TO CANCEL"
-            "possible-fall" -> "POSSIBLE FALL · CAREGIVER ALERT ATTEMPTED"
+            "possible-fall" -> "POSSIBLE FALL PATTERN · CHECK PHONE"
             "horizontal-posture" -> "HORIZONTAL POSTURE · REVIEW SAMPLE"
             else -> null
         }

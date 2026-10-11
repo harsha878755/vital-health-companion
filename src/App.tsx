@@ -83,6 +83,7 @@ import {
   fetchWearableReadings,
   logoutAccount,
   registerAccount,
+  transcribeAssistantVoice,
   AuthUser
 } from "./api";
 import {
@@ -1483,12 +1484,13 @@ type AssistantMessage = { id: number; role: "assistant" | "user"; text: string; 
 
 function localAssistantFallback(question: string, context: { symptoms: string; triage: TriageResponse; vitals: TriageVitals; prescriptionPlan: PrescriptionPlan | null; previousQuestion?: string }): AssistantMessage {
   const text = question.toLowerCase();
-  const urgent = /\b(chest pain|can't breathe|cannot breathe|difficulty breathing|shortness of breath|unconscious|not waking|face droop|slurred speech|severe bleeding|severe allergic reaction)\b/i;
-  if (urgent.test(question) || urgent.test(context.symptoms)) {
-    return { id: Date.now(), role: "assistant", urgent: true, mode: "safety guidance", text: "If this is happening now, call 112 in India or your local emergency number immediately. Do not wait for a chat reply. VITAL cannot contact emergency services." };
-  }
-  if (/^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)\s*[!.?]*\s*$/i.test(question)) {
+  if (/^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*$/i.test(question)) {
     return { id: Date.now(), role: "assistant", mode: "here to help", text: "Hi! 👋 What would you like help with? I can look at your VITAL result, readings, medicine schedule, or help you prepare for a doctor visit.", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit"] };
+  }
+  const urgent = /\b(chest pain|can't breathe|cannot breathe|difficulty breathing|shortness of breath|unconscious|not waking|face droop|slurred speech|severe bleeding|severe allergic reaction)\b/i;
+  const asksAboutSymptoms = /\b(symptoms?|triage|risk|result|these|those|this|should i|what should i do|help|serious|urgent|emergency)\b/i.test(question);
+  if (urgent.test(question) || (asksAboutSymptoms && urgent.test(context.symptoms))) {
+    return { id: Date.now(), role: "assistant", urgent: true, mode: "safety guidance", text: "If this is happening now, call 112 in India or your local emergency number immediately. Do not wait for a chat reply. VITAL cannot contact emergency services." };
   }
   if (/\b(how are (you|u)|how r u|hru|how('s| is) it going|what('s| is) up|sup)\b/i.test(question)) {
     return { id: Date.now(), role: "assistant", mode: "here to help", text: "I’m doing well, thanks for asking! 🙂 How are you feeling today? Tell me what you’re experiencing and I can share general guidance, or choose a topic below.", suggestions: ["I have a fever", "Explain my triage result", "Show my latest readings"] };
@@ -1526,6 +1528,52 @@ function localAssistantFallback(question: string, context: { symptoms: string; t
   return { id: Date.now(), role: "assistant", mode: "offline help", text: `I’m not sure I understood “${question.slice(0, 100)}”. I can help with your VITAL result, readings, recorded medication schedule, or preparing for an appointment. Which would you like to explore?`, suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit"] };
 }
 
+async function encodeVoiceChunksAsWavBase64(chunks: Float32Array[], sourceRate: number) {
+  const sourceLength = chunks.reduce((length, chunk) => length + chunk.length, 0);
+  if (sourceLength < sourceRate * 0.25) throw new Error("That recording was too short. Hold the microphone and speak a little longer.");
+  const source = new Float32Array(sourceLength);
+  let offset = 0;
+  chunks.forEach((chunk) => { source.set(chunk, offset); offset += chunk.length; });
+  const targetRate = 16000;
+  const targetLength = Math.floor(sourceLength * targetRate / sourceRate);
+  const pcm = new ArrayBuffer(targetLength * 2);
+  const view = new DataView(pcm);
+  for (let index = 0; index < targetLength; index += 1) {
+    const position = index * sourceRate / targetRate;
+    const lower = Math.floor(position);
+    const upper = Math.min(lower + 1, sourceLength - 1);
+    const fraction = position - lower;
+    const value = source[lower] * (1 - fraction) + source[upper] * fraction;
+    const sample = Math.max(-1, Math.min(1, value));
+    view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  const wav = new ArrayBuffer(44 + pcm.byteLength);
+  const wavView = new DataView(wav);
+  const writeTag = (position: number, value: string) => { for (let index = 0; index < value.length; index += 1) wavView.setUint8(position + index, value.charCodeAt(index)); };
+  writeTag(0, "RIFF"); wavView.setUint32(4, 36 + pcm.byteLength, true); writeTag(8, "WAVE");
+  writeTag(12, "fmt "); wavView.setUint32(16, 16, true); wavView.setUint16(20, 1, true);
+  wavView.setUint16(22, 1, true); wavView.setUint32(24, targetRate, true); wavView.setUint32(28, targetRate * 2, true);
+  wavView.setUint16(32, 2, true); wavView.setUint16(34, 16, true); writeTag(36, "data"); wavView.setUint32(40, pcm.byteLength, true);
+  new Uint8Array(wav).set(new Uint8Array(pcm), 44);
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not prepare the voice recording."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(new Blob([wav], { type: "audio/wav" }));
+  });
+  return dataUrl.split(",", 2)[1] || "";
+}
+
+async function encodeVoiceBlobAsWavBase64(blob: Blob) {
+  const context = new AudioContext();
+  try {
+    const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+    return await encodeVoiceChunksAsWavBase64([decoded.getChannelData(0)], decoded.sampleRate);
+  } finally {
+    await context.close();
+  }
+}
+
 function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescriptionPlan, onEmergency, onAppointment }: {
   age: number; conditions: string; symptoms: string; triage: TriageResponse; vitals: TriageVitals;
   prescriptionPlan: PrescriptionPlan | null; onEmergency: () => void; onAppointment: () => void;
@@ -1540,10 +1588,10 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   const welcome: AssistantMessage = { id: 1, role: "assistant", mode: "here to help", text: "Hi! 👋 I’m VITAL’s health assistant. What would you like help with?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] };
   const [messages, setMessages] = useState<AssistantMessage[]>([welcome]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const voiceTranscriptRef = useRef("");
-  const voiceQuestionRef = useRef(false);
   const voiceRepliesEnabledRef = useRef(true);
+  const voiceDraftRef = useRef(false);
+  const voiceCaptureRef = useRef<{ stream: MediaStream; context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; silentGain: GainNode; recorder: MediaRecorder; chunks: Blob[]; frameId: number; startedAt: number; lastVoiceAt: number; speechDetected: boolean } | null>(null);
+  const voiceAttemptRef = useRef(0);
   voiceRepliesEnabledRef.current = voiceRepliesEnabled;
 
   function stopSpeaking() {
@@ -1570,116 +1618,146 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   }
 
   function stopVoiceInput() {
-    voiceQuestionRef.current = false;
-    try { recognitionRef.current?.stop(); } catch { /* It may still be setting up. */ }
-    setListening(false);
+    const capture = voiceCaptureRef.current;
+    voiceCaptureRef.current = null;
+    if (!capture) {
+      voiceAttemptRef.current += 1;
+      setListening(false);
+      return;
+    }
+    if (!capture) return;
+    cancelAnimationFrame(capture.frameId);
+    setVoiceStatus("Saving your recording…");
+    if (capture.recorder.state !== "inactive") capture.recorder.stop();
   }
 
   async function startVoiceInput() {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceStatus("Voice input is not supported in this browser. Use the text box or try a current version of Chrome or Edge.");
-      return;
-    }
     if (typeof window.isSecureContext === "boolean" && !window.isSecureContext) {
       setVoiceStatus("Microphone access requires a secure page. Open VITAL on this computer at localhost or use an HTTPS address.");
       return;
     }
+    if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined" || typeof MediaRecorder === "undefined") {
+      setVoiceStatus("This browser does not support microphone recording. Use a current browser or type your question.");
+      return;
+    }
     stopSpeaking();
-    voiceTranscriptRef.current = "";
-    voiceQuestionRef.current = true;
+    const attemptId = ++voiceAttemptRef.current;
     setListening(true);
-    setVoiceStatus("Preparing speech recognition…");
-    const recognition = new Recognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-IN";
-    recognition.onstart = () => {
-      setListening(true);
-      setVoiceStatus("Listening… Speak your question, then pause.");
-    };
-    recognition.onresult = (event) => {
-      const finalParts: string[] = [];
-      const interimParts: string[] = [];
-      Array.from(event.results).forEach((result) => {
-        const transcript = result[0].transcript.trim();
-        if (!transcript) return;
-        (result.isFinal ? finalParts : interimParts).push(transcript);
-      });
-      const finalTranscript = finalParts.join(" ").trim();
-      const combined = [finalTranscript, interimParts.join(" ").trim()].filter(Boolean).join(" ");
-      voiceTranscriptRef.current = finalTranscript || combined;
-      setDraft(combined);
-      if (combined) setVoiceStatus("Speech recognized. Pause to send your question, or tap the microphone to stop.");
-    };
-    recognition.onerror = (event) => {
-      voiceQuestionRef.current = false;
-      setListening(false);
-      const messages: Record<string, string> = {
-        "not-allowed": "Microphone access was denied. Allow microphone access for VITAL in your browser settings, then try again.",
-        "service-not-allowed": "The browser blocked speech recognition. Check browser permissions or type your question instead.",
-        "no-speech": "No speech was detected. Check your microphone and try again.",
-        "audio-capture": "No microphone was found. Connect or enable a microphone, then try again.",
-        network: recognition.processLocally
-          ? "On-device speech recognition could not start. Check that the English speech pack is installed, then retry; you can also use Windows voice typing (Win+H) or type your question."
-          : "The browser speech service is unavailable. Check your connection; if it remains unavailable, use Windows voice typing (Win+H) or type your question.",
-        aborted: "Voice input stopped. Tap the microphone to try again."
-      };
-      setVoiceStatus(messages[event.error] || `Voice input failed (${event.error}). You can type your question instead.`);
-    };
-    recognition.onend = () => {
-      setListening(false);
-      const question = voiceTranscriptRef.current.trim();
-      if (voiceQuestionRef.current && question) {
-        voiceQuestionRef.current = false;
-        setVoiceStatus("Sending your spoken question…");
-        void submitQuestion(question, true);
-      } else if (voiceQuestionRef.current) {
-        voiceQuestionRef.current = false;
-        setVoiceStatus("No clear words were captured. Try again or type your question.");
-      }
-    };
-    recognitionRef.current = recognition;
+    setVoiceStatus("Requesting microphone access…");
+    let stream: MediaStream | null = null;
+    let context: AudioContext | null = null;
     try {
-      let localSpeechReady = false;
-      if (Recognition.available && Recognition.install && "processLocally" in recognition) {
-        for (const language of ["en-IN", "en-US"]) {
-          if (!voiceQuestionRef.current) return;
-          try {
-            let availability = await Recognition.available({ langs: [language], processLocally: true, quality: "dictation" });
-            if (availability === "unavailable") continue;
-            if (availability === "downloadable") {
-              setVoiceStatus(`Downloading the ${language} on-device speech pack. This is a one-time setup; please keep VITAL online.`);
-              const installed = await Recognition.install({ langs: [language], processLocally: true, quality: "dictation" });
-              if (!voiceQuestionRef.current) return;
-              if (!installed) continue;
-              availability = "available";
-            }
-            if (availability === "available") {
-              recognition.lang = language;
-              recognition.processLocally = true;
-              localSpeechReady = true;
-              break;
-            }
-          } catch {
-            // Use standard browser recognition if the on-device pack is unavailable.
-          }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (attemptId !== voiceAttemptRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
+      const audioContext = new AudioContext();
+      context = audioContext;
+      await audioContext.resume();
+      if (attemptId !== voiceAttemptRef.current) { stream.getTracks().forEach((track) => track.stop()); void audioContext.close(); return; }
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
+      analyser.connect(silentGain);
+      silentGain.connect(audioContext.destination);
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const capture = { stream, context: audioContext, source, analyser, silentGain, recorder, chunks: [] as Blob[], frameId: 0, startedAt: performance.now(), lastVoiceAt: 0, speechDetected: false };
+      voiceCaptureRef.current = capture;
+      recorder.ondataavailable = (event) => { if (event.data.size) capture.chunks.push(event.data); };
+      recorder.onerror = () => {
+        if (voiceCaptureRef.current === capture) {
+          cancelVoiceInput();
+          setVoiceStatus("The microphone recording failed. Check that the microphone is connected and try again.");
         }
-      }
-      if (!voiceQuestionRef.current) return;
-      setVoiceStatus(localSpeechReady
-        ? `Listening on this device (${recognition.lang})… speak your question, then pause.`
-        : "On-device speech is unavailable here. Trying your browser’s speech service; its audio handling follows your browser settings.");
-      recognition.start();
+      };
+      recorder.onstop = () => {
+        capture.stream.getTracks().forEach((track) => track.stop());
+        capture.source.disconnect();
+        capture.silentGain.disconnect();
+        void capture.context.close();
+        setListening(false);
+        setVoiceStatus("Transcribing on this computer…");
+        void (async () => {
+          try {
+            const recording = new Blob(capture.chunks, { type: recorder.mimeType || "audio/webm" });
+            const audioBase64 = await encodeVoiceBlobAsWavBase64(recording);
+            const result = await transcribeAssistantVoice(audioBase64);
+            if (!result.transcription) {
+              setVoiceStatus("No clear speech was detected. Try again closer to the microphone, or type your question.");
+              return;
+            }
+            setDraft(result.transcription);
+            voiceDraftRef.current = true;
+            setVoiceStatus("Transcript ready. Review it in the text box, then tap Send.");
+          } catch (error) {
+            setVoiceStatus(error instanceof Error ? error.message : "Local speech recognition failed. Restart VITAL and try again.");
+          }
+        })();
+      };
+      recorder.start(250);
+      setVoiceStatus("Recording now — speak your question. VITAL sends it after a pause, or tap stop.");
+      const samples = new Float32Array(analyser.fftSize);
+      const detectSpeech = () => {
+        if (voiceCaptureRef.current !== capture || recorder.state === "inactive") return;
+        analyser.getFloatTimeDomainData(samples);
+        let energy = 0;
+        for (let index = 0; index < samples.length; index += 1) energy += samples[index] * samples[index];
+        const now = performance.now();
+        if (Math.sqrt(energy / samples.length) > 0.018) {
+          capture.speechDetected = true;
+          capture.lastVoiceAt = now;
+        }
+        if ((capture.speechDetected && now - capture.lastVoiceAt >= 2000) || now - capture.startedAt >= 12_000) {
+          stopVoiceInput();
+          return;
+        }
+        capture.frameId = requestAnimationFrame(detectSpeech);
+      };
+      capture.frameId = requestAnimationFrame(detectSpeech);
     } catch {
-      voiceQuestionRef.current = false;
-      setListening(false);
-      setVoiceStatus("Could not start the microphone. Check site permissions and try again.");
+      stream?.getTracks().forEach((track) => track.stop());
+      if (context && context.state !== "closed") void context.close();
+      if (attemptId === voiceAttemptRef.current) {
+        voiceCaptureRef.current = null;
+        setListening(false);
+        setVoiceStatus("Microphone access was blocked or unavailable. Allow access for VITAL in browser settings, then try again.");
+      }
     }
   }
 
+  function cancelVoiceInput() {
+    voiceAttemptRef.current += 1;
+    const capture = voiceCaptureRef.current;
+    voiceCaptureRef.current = null;
+    if (capture) {
+      cancelAnimationFrame(capture.frameId);
+      capture.recorder.ondataavailable = null;
+      capture.recorder.onstop = null;
+      capture.recorder.onerror = null;
+      if (capture.recorder.state !== "inactive") capture.recorder.stop();
+      capture.source.disconnect();
+      capture.silentGain.disconnect();
+      capture.stream.getTracks().forEach((track) => track.stop());
+      void capture.context.close();
+    }
+    setListening(false);
+  }
+
   useEffect(() => () => {
-    recognitionRef.current?.stop();
+    const capture = voiceCaptureRef.current;
+    if (capture) {
+      cancelAnimationFrame(capture.frameId);
+      capture.recorder.ondataavailable = null;
+      capture.recorder.onstop = null;
+      capture.recorder.onerror = null;
+      if (capture.recorder.state !== "inactive") capture.recorder.stop();
+      capture.source.disconnect();
+      capture.silentGain.disconnect();
+      capture.stream.getTracks().forEach((track) => track.stop());
+      void capture.context.close();
+    }
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   }, []);
 
@@ -1695,19 +1773,32 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   async function submitQuestion(value = draft, fromVoice = false) {
     const question = value.trim();
     if (!question || busy) return;
+    voiceDraftRef.current = false;
     setDraft("");
+    if (/^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*$/i.test(question)) {
+      const now = Date.now();
+      setMessages((items) => [...items,
+        { id: now, role: "user", text: question },
+        { id: now + 1, role: "assistant", mode: "here to help", text: "Hi! 👋 What would you like help with? I can explain your VITAL result, review your readings or recorded medicine schedule, or help you prepare for a doctor visit.", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit"] }
+      ]);
+      return;
+    }
     setMessages((items) => [...items, { id: Date.now(), role: "user", text: question }]);
     setBusy(true);
-    const context = {
-      age,
-      conditions,
-      symptoms,
-      triageState: triage.state,
-      riskScore: triage.score,
-      vitals: `SpO2 ${vitals.spo2}%, pulse ${vitals.pulse} bpm, temperature ${vitals.temperature} °F, systolic BP ${vitals.systolicBp} mmHg, respiration ${vitals.respiration}/min`,
-      medications: prescriptionPlan?.doses.map((dose) => `${dose.medication} ${dose.dose} at ${dose.time}`).join("; ") || "No analyzed medication schedule",
-      riskFactors: triage.riskFactors.join("; ") || "No separate risk factors returned",
-      recommendations: triage.recommendations.join("; ") || "No separate recommendations returned"
+    const asksAboutTriage = /\b(triage|risk score|screening result|my result|risk factors|why am i at risk)\b/i.test(question);
+    const asksAboutReadings = /\b(readings?|my vitals?|pulse|heart rate|blood pressure|spo2|oxygen level|temperature|steps|sleep)\b/i.test(question);
+    const asksAboutMedicines = /\b(medicine|medication|dose|missed dose|prescription|pill|tablet)\b/i.test(question);
+    const asksAboutSymptoms = /\b(symptoms?|triage|risk score|screening result|my result|should i|what should i do|is it serious|emergency)\b/i.test(question);
+    const context: Record<string, string | number> = {
+      ...(asksAboutSymptoms ? { age, conditions, symptoms } : {}),
+      ...(asksAboutTriage ? {
+        triageState: triage.state,
+        riskScore: triage.score,
+        riskFactors: triage.riskFactors.join("; ") || "No separate risk factors returned",
+        recommendations: triage.recommendations.join("; ") || "No separate recommendations returned"
+      } : {}),
+      ...(asksAboutReadings ? { vitals: `SpO2 ${vitals.spo2}%, pulse ${vitals.pulse} bpm, temperature ${vitals.temperature} °F, systolic BP ${vitals.systolicBp} mmHg, respiration ${vitals.respiration}/min` } : {}),
+      ...(asksAboutMedicines ? { medications: prescriptionPlan?.doses.map((dose) => `${dose.medication} ${dose.dose} at ${dose.time}`).join("; ") || "No analyzed medication schedule" } : {})
     };
     try {
       const history = messages.slice(-8).map(({ role, text }) => ({ role, text }));
@@ -1727,7 +1818,7 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   }
 
   function startNewChat() {
-    stopVoiceInput();
+    cancelVoiceInput();
     stopSpeaking();
     setMessages([{ ...welcome, id: Date.now() }]);
     setDraft("");
@@ -1742,7 +1833,7 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
 
   return <div className="health-assistant">
     {open ? <section className="assistant-panel" aria-label="VITAL health assistant">
-      <header className="assistant-header"><div className="assistant-avatar"><Bot /></div><div><strong>Ask VITAL</strong></div><button type="button" aria-label={voiceRepliesEnabled ? "Turn off spoken replies" : "Turn on spoken replies"} aria-pressed={voiceRepliesEnabled} title={voiceRepliesEnabled ? "Spoken replies on" : "Spoken replies off"} onClick={() => { setVoiceRepliesEnabled((enabled) => !enabled); stopSpeaking(); }}><Volume2 className={voiceRepliesEnabled ? "voice-replies-enabled" : "voice-replies-muted"} /></button><button type="button" aria-label="Start a new conversation" title="New chat" onClick={startNewChat}><RotateCcw /></button><button type="button" aria-label="Close assistant" onClick={() => { stopVoiceInput(); stopSpeaking(); setOpen(false); }}><X /></button></header>
+      <header className="assistant-header"><div className="assistant-avatar"><Bot /></div><div className="assistant-heading"><strong>Ask VITAL</strong><span className={`assistant-ai-status ${localAiStatus?.available ? "available" : "unavailable"}`} title={localAiStatus?.available ? `Connected to ${localAiStatus.provider} · ${localAiStatus.modelId}` : "Using offline guidance"}><i aria-hidden="true" />{localAiStatus?.available ? `${localAiStatus.provider} · ${localAiStatus.modelId}` : localAiStatus ? "Offline guidance" : "Checking local model…"}</span></div><button type="button" aria-label={voiceRepliesEnabled ? "Turn off spoken replies" : "Turn on spoken replies"} aria-pressed={voiceRepliesEnabled} title={voiceRepliesEnabled ? "Spoken replies on" : "Spoken replies off"} onClick={() => { setVoiceRepliesEnabled((enabled) => !enabled); stopSpeaking(); }}><Volume2 className={voiceRepliesEnabled ? "voice-replies-enabled" : "voice-replies-muted"} /></button><button type="button" aria-label="Start a new conversation" title="New chat" onClick={startNewChat}><RotateCcw /></button><button type="button" aria-label="Close assistant" onClick={() => { cancelVoiceInput(); stopSpeaking(); setOpen(false); }}><X /></button></header>
       <div className="assistant-messages" ref={listRef} aria-live="polite">
         {messages.map((message) => <article key={message.id} className={`assistant-message ${message.role} ${message.urgent ? "urgent" : ""}`}>
           {message.role === "assistant" ? <span className="assistant-message-label">{message.mode || "VITAL assistant"}</span> : null}
@@ -1753,14 +1844,14 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
         {busy ? <div className="assistant-typing" role="status"><i /><i /><i /><span>Preparing an answer…</span></div> : null}
         {!busy && messages[messages.length - 1]?.role === "assistant" && messages[messages.length - 1]?.suggestions?.length ? <div className="assistant-suggestions"><span>{messages.length === 1 ? "Try asking" : "You can ask next"}</span>{messages[messages.length - 1].suggestions!.map((prompt) => <button type="button" key={prompt} onClick={() => void submitQuestion(prompt)}>{prompt}</button>)}</div> : null}
       </div>
-      <form className="assistant-compose" onSubmit={(event) => { event.preventDefault(); void submitQuestion(); }}>
+      <form className="assistant-compose" onSubmit={(event) => { event.preventDefault(); void submitQuestion(draft, voiceDraftRef.current); }}>
         <label className="sr-only" htmlFor="assistant-question">Ask a health question</label>
-        <textarea id="assistant-question" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask a health question…" rows={1} maxLength={1500} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitQuestion(); } }} />
+        <textarea id="assistant-question" value={draft} onChange={(event) => { setDraft(event.target.value); voiceDraftRef.current = false; }} placeholder="Ask a health question…" rows={1} maxLength={1500} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitQuestion(draft, voiceDraftRef.current); } }} />
         <div className="assistant-compose-actions">
           <button type="button" className={listening ? "is-listening" : ""} aria-label={listening ? "Stop voice input" : "Ask by voice"} title={listening ? "Stop voice input" : "Ask by voice"} disabled={busy} onClick={() => listening ? stopVoiceInput() : startVoiceInput()}>{listening ? <Square /> : <Mic />}</button>
           <button type="submit" aria-label="Send question" disabled={!draft.trim() || busy}><Send /></button>
         </div>
-        {voiceStatus ? <small className="assistant-voice-status" role="status">{voiceStatus}</small> : <small className="assistant-voice-status">Voice recognition is handled by your browser; whether audio stays on-device depends on browser support and settings.</small>}
+        {voiceStatus ? <small className="assistant-voice-status" role="status">{voiceStatus}</small> : <small className="assistant-voice-status">Voice questions are transcribed locally by VITAL. Audio is not sent to a browser speech service.</small>}
       </form>
       <p className="assistant-disclaimer">General information only. Not a diagnosis or prescription. For urgent symptoms, call emergency services.</p>
       <div className="assistant-shortcuts"><button type="button" onClick={onAppointment}>Appointments</button><button type="button" onClick={onEmergency}>Emergency help</button></div>

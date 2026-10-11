@@ -35,6 +35,18 @@ function Get-HttpResponse([string]$url) {
   try { return Invoke-WebRequest -Uri $url -TimeoutSec 2 -UseBasicParsing } catch { return $null }
 }
 
+function Test-AssistantTranscriptionRoute {
+  try {
+    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$backendPort/api/assistant/transcribe" -Method Post -ContentType "application/json" -Body "{}" -TimeoutSec 3 -UseBasicParsing
+    return ([int]$response.StatusCode -lt 500)
+  } catch {
+    $response = $_.Exception.Response
+    if ($null -eq $response) { return $false }
+    try { $statusCode = [int]$response.StatusCode } catch { return $false }
+    return $statusCode -in @(400, 401, 413, 503)
+  }
+}
+
 function Wait-ForHttp([string]$url, [int]$seconds) {
   for ($attempt = 0; $attempt -lt $seconds; $attempt++) {
     $response = Get-HttpResponse $url
@@ -73,6 +85,18 @@ if (-not (Test-Path $venvPython)) {
   if ($LASTEXITCODE -ne 0) { throw "Could not install backend dependencies." }
 }
 
+$voskInstalled = $false
+& $venvPython -c "import vosk" 2>$null
+if ($LASTEXITCODE -eq 0) { $voskInstalled = $true }
+if (-not $voskInstalled) {
+  Write-Host "Installing local voice recognition dependency..."
+  & $venvPython -m pip install -r (Join-Path $root "backend\requirements.txt")
+  if ($LASTEXITCODE -ne 0) { throw "Could not install local voice recognition. Check your internet connection, then retry START VITAL.cmd." }
+}
+Write-Host "Checking VITAL offline speech model..."
+& $venvPython (Join-Path $root "scripts\setup_vosk_model.py")
+if ($LASTEXITCODE -ne 0) { throw "Could not prepare local voice recognition. Check your internet connection, then retry START VITAL.cmd." }
+
 $distIndex = Join-Path $root "dist\index.html"
 $builtAssets = @(Get-ChildItem (Join-Path $root "dist\assets") -File -ErrorAction SilentlyContinue)
 $latestBuiltAsset = $builtAssets | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -91,6 +115,7 @@ if ($frontendNeedsBuild) {
 
 $backendHealth = Get-HttpResponse "http://127.0.0.1:$backendPort/api/health"
 if ($null -ne $backendHealth) {
+  $transcriptionRouteReady = Test-AssistantTranscriptionRoute
   $listener = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
   $owner = if ($listener) { Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
   $expectedServerPath = Join-Path $root "backend\server.py"
@@ -100,11 +125,15 @@ if ($null -ne $backendHealth) {
   )
   $latestBackendSource = Get-ChildItem (Join-Path $root "backend") -Filter "*.py" -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
   $backendEnvFile = Get-Item (Join-Path $root "backend\.env") -ErrorAction SilentlyContinue
-  $backendCodeChanged = $latestBackendSource -and $latestBackendSource.LastWriteTime -gt $owner.CreationDate
+  $backendCodeChanged = ($latestBackendSource -and $latestBackendSource.LastWriteTime -gt $owner.CreationDate) -or -not $transcriptionRouteReady
   $backendConfigChanged = $backendEnvFile -and $backendEnvFile.LastWriteTime -gt $owner.CreationDate
   if ($ownerIsVitalBackend -and ($backendCodeChanged -or $backendConfigChanged)) {
-    Write-Host "Restarting the VITAL backend to load updated API code or SMS configuration..."
-    Stop-Process -Id $owner.ProcessId -Force
+    Write-Host "Restarting VITAL's backend to load updated API code, local voice recognition, or SMS configuration..."
+    $backendInstances = @(Get-CimInstance Win32_Process | Where-Object {
+      $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine -match '(?:^|\s)["'']?backend[\\/]server\.py(?:["'']|\s|$)'
+    })
+    if ($backendInstances.Count -eq 0) { $backendInstances = @($owner) }
+    $backendInstances | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     for ($attempt = 0; $attempt -lt 10 -and (Test-ListeningPort $backendPort); $attempt++) { Start-Sleep -Seconds 1 }
     if (Test-ListeningPort $backendPort) { throw "Could not restart the VITAL backend on port $backendPort." }
     $backendHealth = $null

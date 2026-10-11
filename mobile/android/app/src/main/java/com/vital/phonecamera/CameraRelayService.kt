@@ -67,6 +67,8 @@ class CameraRelayService : LifecycleService() {
     @Volatile private var isCapturing = false
     @Volatile private var stopped = false
     @Volatile private var fallAlertPending = false
+    @Volatile private var fallAlertDispatchStarted = false
+    @Volatile private var fallResponseDeadlineMs = 0L
     @Volatile private var fallAlertCooldownUntil = 0L
     @Volatile private var yoloUnavailable = false
     private var previousPoseForMetrics: YoloPose? = null
@@ -76,6 +78,7 @@ class CameraRelayService : LifecycleService() {
     private var verificationUprightSamples = 0
     private var confirmedFallDisplayUntilMs = 0L
     private val networkBusy = AtomicBoolean(false)
+    private val fallAlertDispatch = Runnable { dispatchPendingFallAlert() }
     private val captureLoop: Runnable = object : Runnable {
         override fun run() {
             if (stopped || isCapturing) return
@@ -118,9 +121,19 @@ class CameraRelayService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        if (intent?.action == ACTION_STOP) {
-            stopRelay()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopRelay()
+                return START_NOT_STICKY
+            }
+            ACTION_CANCEL_FALL_ALERT -> {
+                cancelPendingFallAlert()
+                return START_NOT_STICKY
+            }
+            ACTION_SEND_FALL_ALERT_NOW -> {
+                dispatchPendingFallAlert(userRequested = true)
+                return START_NOT_STICKY
+            }
         }
         if (stopped) return START_NOT_STICKY
         startAsForeground()
@@ -329,15 +342,43 @@ class CameraRelayService : LifecycleService() {
         bitmap.recycle()
         if (possibleFall) {
             fallAlertPending = true
+            fallAlertDispatchStarted = false
             fallAlertCooldownUntil = now + ALERT_COOLDOWN_MS
             ui.post {
-                updateNotification("Possible fall flagged · attempting caregiver SMS now")
-                showFallAlertNotification()
+                fallResponseDeadlineMs = System.currentTimeMillis() + FALL_RESPONSE_WINDOW_MS
+                updateNotification("Possible fall pattern · 10 seconds to confirm you're okay")
+                showFallConfirmationNotification()
                 sendBroadcast(Intent(ACTION_POSSIBLE_FALL_CONFIRMED).setPackage(packageName))
-                sendPossibleFallEvent()
+                ui.removeCallbacks(fallAlertDispatch)
+                ui.postDelayed(fallAlertDispatch, FALL_RESPONSE_WINDOW_MS)
             }
         }
         return FrameAnalysis(annotated, poseStatus)
+    }
+
+    private fun dispatchPendingFallAlert(userRequested: Boolean = false) {
+        if (!fallAlertPending || fallAlertDispatchStarted) return
+        fallAlertDispatchStarted = true
+        fallResponseDeadlineMs = 0L
+        ui.removeCallbacks(fallAlertDispatch)
+        val reason = if (userRequested) "You requested it · sending possible-fall alert" else "No confirmation · sending possible-fall alert"
+        updateNotification(reason)
+        showFallAlertNotification()
+        getSystemService(NotificationManager::class.java).cancel(FALL_CONFIRMATION_NOTIFICATION_ID)
+        sendBroadcast(Intent(ACTION_POSSIBLE_FALL_DISPATCHED).setPackage(packageName).putExtra(EXTRA_FALL_DISPATCH_REASON, reason))
+        sendPossibleFallEvent()
+    }
+
+    private fun cancelPendingFallAlert() {
+        if (!fallAlertPending || fallResponseDeadlineMs == 0L) return
+        fallResponseDeadlineMs = 0L
+        fallAlertPending = false
+        fallAlertDispatchStarted = false
+        ui.removeCallbacks(fallAlertDispatch)
+        getSystemService(NotificationManager::class.java).cancel(FALL_CONFIRMATION_NOTIFICATION_ID)
+        getSystemService(NotificationManager::class.java).cancel(FALL_ALERT_NOTIFICATION_ID)
+        updateNotification("Fall alert cancelled · user confirmed they are okay")
+        sendBroadcast(Intent(ACTION_POSSIBLE_FALL_CANCELLED).setPackage(packageName))
     }
 
     private fun publishFrameToPhone(jpeg: ByteArray) {
@@ -352,6 +393,7 @@ class CameraRelayService : LifecycleService() {
             if (base.isBlank() || token.isBlank()) {
                 ui.post {
                     fallAlertPending = false
+                    fallAlertDispatchStarted = false
                     val status = "Possible fall · VITAL offline; no caregiver alert sent"
                     updateNotification(status)
                     updateFallAlertNotification(status)
@@ -439,6 +481,7 @@ class CameraRelayService : LifecycleService() {
                     }
                     ui.post {
                         fallAlertPending = false
+                        fallAlertDispatchStarted = false
                         updateNotification(status)
                         updateFallAlertNotification(status)
                     }
@@ -446,6 +489,7 @@ class CameraRelayService : LifecycleService() {
             } catch (_: Exception) {
                 ui.post {
                     fallAlertPending = false
+                    fallAlertDispatchStarted = false
                     val status = "Possible fall · VITAL offline; no caregiver alert sent"
                     updateNotification(status)
                     updateFallAlertNotification(status)
@@ -456,8 +500,16 @@ class CameraRelayService : LifecycleService() {
 
     private fun stopRelay() {
         if (stopped) return
+        val cancelledFallConfirmation = fallAlertPending && fallResponseDeadlineMs > 0L
         stopped = true
         ui.removeCallbacksAndMessages(null)
+        fallAlertPending = false
+        fallAlertDispatchStarted = false
+        fallResponseDeadlineMs = 0L
+        getSystemService(NotificationManager::class.java).cancel(FALL_CONFIRMATION_NOTIFICATION_ID)
+        if (cancelledFallConfirmation) {
+            sendBroadcast(Intent(ACTION_POSSIBLE_FALL_CANCELLED).setPackage(packageName))
+        }
         runCatching { yoloPoseDetector?.close() }
         yoloPoseDetector = null
         cameraProvider?.unbindAll()
@@ -506,7 +558,22 @@ class CameraRelayService : LifecycleService() {
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop camera", stopIntent)
-        if (fallAlertPending) {
+        if (fallAlertPending && fallResponseDeadlineMs > 0L) {
+            val okayIntent = PendingIntent.getService(
+                this, 4,
+                Intent(this, CameraRelayService::class.java).setAction(ACTION_CANCEL_FALL_ALERT),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val callIntent = PendingIntent.getActivity(
+                this, 3,
+                Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.checkbox_on_background, "I'm okay", okayIntent)
+                .addAction(android.R.drawable.ic_menu_call, "Call 112", callIntent)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+        } else if (fallAlertPending) {
             val callIntent = PendingIntent.getActivity(
                 this, 3,
                 Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")),
@@ -533,13 +600,38 @@ class CameraRelayService : LifecycleService() {
         val notification = NotificationCompat.Builder(this, FALL_ALERT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle("VITAL: possible fall")
-            .setContentText("Emergency alert: possible fall detected. Check the person now; this alert may be a false alarm.")
+            .setContentText("No response to the fall check. A caregiver alert is being sent; this may be a false alarm.")
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .addAction(android.R.drawable.ic_menu_call, "Call 112", callIntent)
             .build()
         getSystemService(NotificationManager::class.java).notify(FALL_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    private fun showFallConfirmationNotification() {
+        val okayIntent = PendingIntent.getService(
+            this, 4,
+            Intent(this, CameraRelayService::class.java).setAction(ACTION_CANCEL_FALL_ALERT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val sendIntent = PendingIntent.getService(
+            this, 5,
+            Intent(this, CameraRelayService::class.java).setAction(ACTION_SEND_FALL_ALERT_NOW),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, FALL_CONFIRMATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("VITAL: possible fall pattern")
+            .setContentText("Tap I'm okay to cancel, or send a caregiver alert now. Auto-send in 10 seconds.")
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .addAction(android.R.drawable.checkbox_on_background, "I'm okay", okayIntent)
+            .addAction(android.R.drawable.ic_dialog_email, "Send alert now", sendIntent)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(FALL_CONFIRMATION_NOTIFICATION_ID, notification)
     }
 
     private fun updateFallAlertNotification(status: String) {
@@ -580,6 +672,17 @@ class CameraRelayService : LifecycleService() {
                 vibrationPattern = longArrayOf(0, 600, 250, 600, 250, 1_000)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(alertChannel)
+            val confirmationChannel = NotificationChannel(
+                FALL_CONFIRMATION_CHANNEL_ID,
+                "VITAL fall confirmation",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "A 10-second chance to confirm you're okay or request a caregiver alert"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 250, 150, 250)
+                setShowBadge(false)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(confirmationChannel)
         }
     }
 
@@ -601,18 +704,26 @@ class CameraRelayService : LifecycleService() {
     companion object {
         const val ACTION_START = "com.vital.phonecamera.action.START"
         const val ACTION_STOP = "com.vital.phonecamera.action.STOP"
+        const val ACTION_CANCEL_FALL_ALERT = "com.vital.phonecamera.action.CANCEL_FALL_ALERT"
+        const val ACTION_SEND_FALL_ALERT_NOW = "com.vital.phonecamera.action.SEND_FALL_ALERT_NOW"
         const val ACTION_FRAME_UPDATED = "com.vital.phonecamera.action.FRAME_UPDATED"
         const val ACTION_POSSIBLE_FALL_CONFIRMED = "com.vital.phonecamera.action.POSSIBLE_FALL_CONFIRMED"
+        const val ACTION_POSSIBLE_FALL_CANCELLED = "com.vital.phonecamera.action.POSSIBLE_FALL_CANCELLED"
+        const val ACTION_POSSIBLE_FALL_DISPATCHED = "com.vital.phonecamera.action.POSSIBLE_FALL_DISPATCHED"
         const val EXTRA_FRAME_JPEG = "frameJpeg"
+        const val EXTRA_FALL_DISPATCH_REASON = "fallDispatchReason"
         private const val CHANNEL_ID = "vital_camera_session"
         // A new channel ID lets existing installs get the alarm sound setting;
         // Android does not let an app change the sound on an already-created channel.
         private const val FALL_ALERT_CHANNEL_ID = "vital_possible_fall_alert_v3"
+        private const val FALL_CONFIRMATION_CHANNEL_ID = "vital_fall_confirmation_v1"
         private const val NOTIFICATION_ID = 6204
         private const val FALL_ALERT_NOTIFICATION_ID = 6205
+        private const val FALL_CONFIRMATION_NOTIFICATION_ID = 6206
         internal const val FRAME_INTERVAL_MS = 900L
         private const val ALERT_COOLDOWN_MS = 15 * 60 * 1000L
         internal const val FALL_STILLNESS_CONFIRMATION_MS = 4_000L
+        internal const val FALL_RESPONSE_WINDOW_MS = 10_000L
         internal const val VERIFICATION_POSE_GRACE_MS = 2_200L
         internal const val UPRIGHT_CANCEL_SAMPLES = 2
         // Camera framing and pose-box jitter should not keep restarting the
