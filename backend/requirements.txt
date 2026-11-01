@@ -4,3 +4,4 @@ numpy>=1.26
 pandas>=2.1
 Pillow>=10.0
 vosk>=0.3.45
+faster-whisper>=1.1,<2

@@ -33,13 +33,13 @@ export default defineConfig({
       ignored: ["**/public/pill-references/**"]
     },
     proxy: {
-      "/api": "http://127.0.0.1:5055"
+      "/api": "http://127.0.0.1:5056"
     }
   },
   preview: {
-    port: 5186,
+    port: 5187,
     proxy: {
-      "/api": "http://127.0.0.1:5055"
+      "/api": "http://127.0.0.1:5056"
     }
   }
 });

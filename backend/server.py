@@ -47,14 +47,14 @@ def load_private_env_file() -> None:
 load_private_env_file()
 
 HOST = os.environ.get("VITAL_HOST", "127.0.0.1")
-PORT = 5055
+PORT = int(os.environ.get("VITAL_PORT", "5056"))
 APP_ENV = os.environ.get("VITAL_ENV", "development").strip().lower()
 IS_PRODUCTION = APP_ENV in {"prod", "production"}
 DEFAULT_ALLOWED_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
-    "http://127.0.0.1:5186",
-    "http://localhost:5186",
+    "http://127.0.0.1:5187",
+    "http://localhost:5187",
 }
 configured_origins = os.environ.get("VITAL_ALLOWED_ORIGINS", "").strip()
 if IS_PRODUCTION and not configured_origins:
@@ -1440,6 +1440,40 @@ def http_json(url: str, payload: dict[str, Any] | None = None, timeout: int = 8)
         return json.loads(response.read().decode("utf-8"))
 
 
+def select_local_vision_model(models: list[dict[str, Any]]) -> str | None:
+    """Prefer the smallest installed vision model to reduce runner crashes on PCs."""
+    candidates: list[tuple[float, int, str]] = []
+    for index, item in enumerate(models):
+        model_name = str(item.get("model") or item.get("name") or "").strip()
+        if not model_name:
+            continue
+        try:
+            details = http_json(f"{OLLAMA_ENDPOINT}/api/show", {"model": model_name}, timeout=8)
+        except Exception:
+            continue
+        capabilities = details.get("capabilities") or []
+        if "vision" not in capabilities and not re.search(r"(?:gemma3|llava|qwen.*vl|minicpm-v)", model_name, re.IGNORECASE):
+            continue
+
+        # Ollama exposes parameter_count/parameter_size on most model versions.
+        # Use those when available, and fall back to the model's :4b/:7b tag.
+        size = float("inf")
+        model_info = details.get("model_info") or {}
+        parameter_count = next((value for key, value in model_info.items() if str(key).endswith("parameter_count") and isinstance(value, (int, float))), None)
+        if parameter_count:
+            size = float(parameter_count)
+        else:
+            parameter_size = str((details.get("details") or {}).get("parameter_size") or "")
+            size_match = re.search(r"([\d.]+)\s*([BM])", parameter_size, re.IGNORECASE)
+            name_match = re.search(r":([\d.]+)([bm])(?:-|$)", model_name, re.IGNORECASE)
+            match = size_match or name_match
+            if match:
+                size = float(match.group(1)) * (1_000_000_000 if match.group(2).lower() == "b" else 1_000_000)
+        candidates.append((size, index, model_name))
+
+    return min(candidates)[2] if candidates else None
+
+
 def get_local_ai_status() -> dict[str, Any]:
     notes: list[str] = []
     try:
@@ -1626,27 +1660,40 @@ def health_chat_fallback(
 
 def answer_health_question(payload: dict[str, Any]) -> dict[str, Any]:
     question = str(payload.get("question") or "").strip()[:1500]
+    language = str(payload.get("language") or "en").lower()
+    if language not in {"en", "hi", "kn"}:
+        language = "en"
     if not question:
         return {"error": "Type a question first."}
     # Greetings should not inherit an emergency warning from saved symptom context.
     # Keep this narrow so a greeting followed by a symptom still reaches safety checks.
-    if re.fullmatch(r"\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*", question, re.IGNORECASE):
+    if language == "hi" and re.fullmatch(r"\s*(नमस्ते|नमस्कार|हेलो|हाय)\s*[!.?।]*\s*", question, re.IGNORECASE):
+        return {"answer": "नमस्ते! मैं VITAL का स्वास्थ्य सहायक हूँ। आप अपने स्वास्थ्य माप, VITAL के जाँच परिणाम या दवा के दर्ज समय के बारे में पूछ सकते हैं।", "urgent": False, "mode": "यहाँ मदद के लिए", "suggestions": []}
+    if language == "kn" and re.fullmatch(r"\s*(ನಮಸ್ಕಾರ|ನಮಸ್ತೆ|ಹಲೋ)\s*[!.?।]*\s*", question, re.IGNORECASE):
+        return {"answer": "ನಮಸ್ಕಾರ! ನಾನು VITAL ಆರೋಗ್ಯ ಸಹಾಯಕ. ನಿಮ್ಮ ಆರೋಗ್ಯ ಮಾಪನಗಳು, VITAL ಪರಿಶೀಲನಾ ಫಲಿತಾಂಶ ಅಥವಾ ದಾಖಲಿಸಿದ ಔಷಧಿ ವೇಳಾಪಟ್ಟಿಯ ಬಗ್ಗೆ ಕೇಳಬಹುದು.", "urgent": False, "mode": "ಸಹಾಯಕ್ಕೆ ಸಿದ್ಧ", "suggestions": []}
+    if language != "en" and not get_local_ai_status().get("available"):
+        if language == "hi":
+            answer = "VITAL का स्थानीय भाषा मॉडल अभी उपलब्ध नहीं है। कृपया बाद में फिर कोशिश करें या अंग्रेज़ी में अपना सवाल लिखें। यह ऐप निदान या नुस्खा नहीं देता। गंभीर लक्षण हों तो आपातकालीन सेवाओं से संपर्क करें।"
+        else:
+            answer = "VITAL ನ ಸ್ಥಳೀಯ ಭಾಷಾ ಮಾದರಿ ಈಗ ಲಭ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ಪ್ರಶ್ನೆ ಬರೆಯಿರಿ. ಈ ಆ್ಯಪ್ ರೋಗನಿರ್ಣಯ ಅಥವಾ ಔಷಧ ಚೀಟಿ ನೀಡುವುದಿಲ್ಲ. ತೀವ್ರ ಲಕ್ಷಣಗಳಿದ್ದರೆ ತುರ್ತು ಸೇವೆಗಳನ್ನು ಸಂಪರ್ಕಿಸಿ."
+        return {"answer": answer, "urgent": False, "mode": "ಸ್ಥಳೀಯ ಸಹಾಯ", "suggestions": []}
+    if language == "en" and re.fullmatch(r"\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*", question, re.IGNORECASE):
         return health_chat_fallback(question)
-    if re.fullmatch(r"\s*(what is vital|what does vital do|tell me about vital)\s*[?.!]*\s*", question, re.IGNORECASE):
+    if language == "en" and re.fullmatch(r"\s*(what is vital|what does vital do|tell me about vital)\s*[?.!]*\s*", question, re.IGNORECASE):
         return {
             "answer": "VITAL is a health companion prototype for reviewing health readings, symptom-screening results, medication schedules, prescription text, reminders, and posture alerts. It provides general information, not a diagnosis, and it cannot dispatch emergency services.",
             "urgent": False,
             "mode": "VITAL overview",
             "suggestions": ["Show my latest readings", "Explain my triage result", "Help me prepare for a doctor visit"],
         }
-    if re.search(r"\b(what can (?:you|vital) do|how can (?:you|vital) help)\b", question, re.IGNORECASE):
+    if language == "en" and re.search(r"\b(what can (?:you|vital) do|how can (?:you|vital) help)\b", question, re.IGNORECASE):
         return {
             "answer": "I can explain VITAL screening results, summarize readings or your recorded medicine schedule, share general health information, and help prepare questions for a clinician. I can’t diagnose, change a medicine dose, or contact emergency services.",
             "urgent": False,
             "mode": "here to help",
             "suggestions": ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit"],
         }
-    if re.search(r"\b(how can i stay healthy|healthy habits|how to be healthy)\b", question, re.IGNORECASE):
+    if language == "en" and re.search(r"\b(how can i stay healthy|healthy habits|how to be healthy)\b", question, re.IGNORECASE):
         return {
             "answer": "Build steady habits around regular movement, balanced meals, enough sleep, and avoiding tobacco; follow your clinician’s plan for any ongoing condition. Small changes you can maintain are more useful than extreme routines.",
             "urgent": False,
@@ -1673,11 +1720,15 @@ def answer_health_question(payload: dict[str, Any]) -> dict[str, Any]:
         safe_history = []
     urgent_terms = re.compile(
         r"\b(chest pain|can't breathe|cannot breathe|difficulty breathing|shortness of breath|"
-        r"unconscious|not waking|face droop|slurred speech|severe bleeding|severe allergic reaction)\b",
+        r"unconscious|not waking|face droop|slurred speech|severe bleeding|severe allergic reaction)\b|"
+        r"सीने में दर्द|साँस लेने में कठिनाई|सांस लेने में कठिनाई|बेहोश|नहीं जाग रहा|गंभीर रक्तस्राव|गंभीर एलर्जी|"
+        r"ಎದೆ ನೋವು|ಉಸಿರಾಟದ ತೊಂದರೆ|ಉಸಿರಾಡಲು ಆಗುತ್ತಿಲ್ಲ|ಪ್ರಜ್ಞೆ ತಪ್ಪಿದೆ|ಎಚ್ಚರವಾಗುತ್ತಿಲ್ಲ|ತೀವ್ರ ರಕ್ತಸ್ರಾವ|ತೀವ್ರ ಅಲರ್ಜಿ",
         re.IGNORECASE,
     )
     asks_about_symptoms = bool(re.search(
-        r"\b(symptoms?|triage|risk|result|these|those|this|should i|what should i do|help|serious|urgent|emergency)\b",
+        r"\b(symptoms?|triage|risk|result|these|those|this|should i|what should i do|help|serious|urgent|emergency)\b|"
+        r"लक्षण|दर्द|साँस|सांस|गंभीर|आपात|क्या करूँ|क्या करूं|"
+        r"ಲಕ್ಷಣ|ನೋವು|ಉಸಿರಾಟ|ತುರ್ತು|ಏನು ಮಾಡಲಿ",
         question,
         re.IGNORECASE,
     ))
@@ -1685,16 +1736,22 @@ def answer_health_question(payload: dict[str, Any]) -> dict[str, Any]:
     if not urgent_match and asks_about_symptoms:
         urgent_match = urgent_terms.search(safe_context.get("symptoms", ""))
     if urgent_match:
+        if language == "hi":
+            return {"answer": "यदि यह अभी आपको या आपके पास मौजूद किसी व्यक्ति को हो रहा है, तो भारत में तुरंत 112 या अपने स्थानीय आपातकालीन नंबर पर कॉल करें। चैट के जवाब का इंतज़ार न करें। VITAL आपातकालीन सेवाओं से संपर्क नहीं कर सकता।", "urgent": True, "mode": "सुरक्षा मार्गदर्शन", "suggestions": []}
+        if language == "kn":
+            return {"answer": "ಇದು ಈಗ ನಿಮಗೆ ಅಥವಾ ನಿಮ್ಮ ಹತ್ತಿರದ ವ್ಯಕ್ತಿಗೆ ಆಗುತ್ತಿದ್ದರೆ, ಭಾರತದಲ್ಲಿ ತಕ್ಷಣ 112 ಅಥವಾ ಸ್ಥಳೀಯ ತುರ್ತು ಸಂಖ್ಯೆಗೆ ಕರೆ ಮಾಡಿ. ಚಾಟ್ ಉತ್ತರಕ್ಕಾಗಿ ಕಾಯಬೇಡಿ. VITAL ತುರ್ತು ಸೇವೆಗಳನ್ನು ಸಂಪರ್ಕಿಸಲು ಸಾಧ್ಯವಿಲ್ಲ.", "urgent": True, "mode": "ಸುರಕ್ಷತಾ ಮಾರ್ಗದರ್ಶನ", "suggestions": []}
         return health_chat_fallback(urgent_match.string, safe_context, safe_history)
     if not asks_about_symptoms:
         safe_context.pop("symptoms", None)
 
     status = get_local_ai_status()
     if status.get("available") and status.get("modelId"):
+        response_language = {"en": "English", "hi": "Hindi", "kn": "Kannada"}[language]
         system_prompt = (
             "You are VITAL, a health information assistant, not a clinician. Answer the user's actual question "
             "directly in one concise sentence. Use supplied session data only when relevant. Never diagnose or "
-            "prescribe/change doses. For severe symptoms in the question, advise emergency care."
+            "prescribe/change doses. For severe symptoms in the question, advise emergency care. "
+            f"Reply in {response_language}. Preserve medicine names, measured values, units, and emergency numbers exactly."
         )
         context_prompt = (
             "Relevant VITAL session data (may be incomplete):\n" + json.dumps(safe_context, ensure_ascii=False) + "\n\n"
@@ -1731,12 +1788,22 @@ def answer_health_question(payload: dict[str, Any]) -> dict[str, Any]:
                 return {"answer": answer.strip()[:5000], "urgent": False, "mode": "local AI", "suggestions": health_chat_suggestions(question)}
         except Exception as exc:
             print(f"Local AI request failed ({status.get('provider')}): {type(exc).__name__}", flush=True)
+            if language == "hi":
+                unavailable_answer = "Ollama उपलब्ध है, लेकिन उसने जवाब नहीं दिया। मॉडल अभी लोड हो रहा हो सकता है; थोड़ी देर बाद फिर कोशिश करें। यह जवाब स्थानीय मॉडल ने नहीं बनाया।"
+            elif language == "kn":
+                unavailable_answer = "Ollama ಸಂಪರ್ಕಗೊಂಡಿದೆ, ಆದರೆ ಉತ್ತರ ನೀಡಲಿಲ್ಲ. ಮಾದರಿ ಇನ್ನೂ ಲೋಡ್ ಆಗುತ್ತಿರಬಹುದು; ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ. ಈ ಉತ್ತರವನ್ನು ಸ್ಥಳೀಯ ಮಾದರಿ ರಚಿಸಿಲ್ಲ."
+            else:
+                unavailable_answer = "Ollama was detected, but it did not return an answer. The model may still be loading; please try again shortly. This response was not generated by the local model."
             return {
-                "answer": "Ollama was detected, but it did not return an answer. The model may still be loading; please try again shortly. This response was not generated by the local model.",
+                "answer": unavailable_answer,
                 "urgent": False,
                 "mode": "local AI unavailable",
                 "suggestions": health_chat_suggestions(question),
             }
+    if language == "hi":
+        return {"answer": "VITAL का स्थानीय भाषा मॉडल अभी उपलब्ध नहीं है। मैं इस सवाल का विश्वसनीय हिंदी जवाब अभी तैयार नहीं कर पा रहा हूँ। गंभीर लक्षण हों तो आपातकालीन सेवाओं से संपर्क करें।", "urgent": False, "mode": "स्थानीय सहायता अनुपलब्ध", "suggestions": []}
+    if language == "kn":
+        return {"answer": "VITAL ನ ಸ್ಥಳೀಯ ಭಾಷಾ ಮಾದರಿ ಈಗ ಲಭ್ಯವಿಲ್ಲ. ಈ ಪ್ರಶ್ನೆಗೆ ವಿಶ್ವಾಸಾರ್ಹ ಕನ್ನಡ ಉತ್ತರವನ್ನು ಈಗ ನೀಡಲು ಸಾಧ್ಯವಾಗುತ್ತಿಲ್ಲ. ತೀವ್ರ ಲಕ್ಷಣಗಳಿದ್ದರೆ ತುರ್ತು ಸೇವೆಗಳನ್ನು ಸಂಪರ್ಕಿಸಿ.", "urgent": False, "mode": "ಸ್ಥಳೀಯ ಸಹಾಯ ಲಭ್ಯವಿಲ್ಲ", "suggestions": []}
     return health_chat_fallback(question, safe_context, safe_history)
 
 
@@ -1849,19 +1916,7 @@ def extract_prescription_image(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         raise RuntimeError("VITAL could not reach local Ollama. Start Ollama and retry; the prescription image was not sent elsewhere.") from exc
 
-    vision_model = None
-    for item in models[:8]:
-        model_name = item.get("model") or item.get("name")
-        if not model_name:
-            continue
-        try:
-            details = http_json(f"{OLLAMA_ENDPOINT}/api/show", {"model": model_name}, timeout=8)
-            capabilities = details.get("capabilities") or []
-            if "vision" in capabilities or re.search(r"(?:gemma3|llava|qwen.*vl|minicpm-v)", model_name, re.IGNORECASE):
-                vision_model = model_name
-                break
-        except Exception:
-            continue
+    vision_model = select_local_vision_model(models)
     if not vision_model:
         raise RuntimeError("No vision-capable Ollama model is installed. Install a vision model such as gemma3:4b and retry.")
 
@@ -1882,10 +1937,26 @@ def extract_prescription_image(payload: dict[str, Any]) -> dict[str, Any]:
                 "format": "json",
                 "stream": False,
                 "keep_alive": "5m",
-                "options": {"temperature": 0, "num_predict": 1400},
+                "options": {"temperature": 0, "num_predict": 1400, "num_ctx": 2048, "num_gpu": 0},
             },
             timeout=180,
         )
+    except HTTPError as exc:
+        # Ollama returns useful model/runtime details in the HTTP response body
+        # (for example, an unsupported image input or insufficient memory). Keep
+        # those details visible so the user can fix the actual cause instead of
+        # seeing only the unhelpful exception class "HTTPError".
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            error_payload = json.loads(error_body)
+            ollama_detail = str(error_payload.get("error") or "").strip()
+        except (ValueError, OSError):
+            ollama_detail = ""
+        detail = f": {ollama_detail[:240]}" if ollama_detail else ""
+        raise RuntimeError(
+            f"Ollama rejected the prescription image request (HTTP {exc.code}){detail}. "
+            "Check that the selected vision model is installed and supports image input."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"The local vision model could not read the prescription ({type(exc).__name__}). Check the photo and retry.") from exc
 
@@ -1958,19 +2029,7 @@ def read_tablet_imprint(payload: dict[str, Any]) -> dict[str, Any]:
         models = http_json(f"{OLLAMA_ENDPOINT}/api/tags", timeout=5).get("models", [])
     except Exception as exc:
         raise RuntimeError("VITAL could not reach local Ollama. Start Ollama and retry; the image is processed locally.") from exc
-    vision_model = None
-    for item in models[:8]:
-        model_name = item.get("model") or item.get("name")
-        if not model_name:
-            continue
-        try:
-            details = http_json(f"{OLLAMA_ENDPOINT}/api/show", {"model": model_name}, timeout=8)
-            capabilities = details.get("capabilities") or []
-            if "vision" in capabilities or re.search(r"(?:gemma3|llava|qwen.*vl|minicpm-v)", model_name, re.IGNORECASE):
-                vision_model = model_name
-                break
-        except Exception:
-            continue
+    vision_model = select_local_vision_model(models)
     if not vision_model:
         raise RuntimeError("No vision-capable Ollama model is installed. VITAL cannot read a tablet imprint without one.")
 
@@ -1992,7 +2051,7 @@ def read_tablet_imprint(payload: dict[str, Any]) -> dict[str, Any]:
                 "format": "json",
                 "stream": False,
                 "keep_alive": "5m",
-                "options": {"temperature": 0, "num_predict": 180},
+                "options": {"temperature": 0, "num_predict": 180, "num_ctx": 2048, "num_gpu": 0},
             },
             timeout=120,
         )
@@ -2063,19 +2122,7 @@ def read_medicine_package_label(payload: dict[str, Any]) -> dict[str, Any]:
         models = http_json(f"{OLLAMA_ENDPOINT}/api/tags", timeout=5).get("models", [])
     except Exception as exc:
         raise RuntimeError("VITAL could not reach local Ollama. Start Ollama and retry; the image is processed locally.") from exc
-    vision_model = None
-    for item in models[:8]:
-        model_name = item.get("model") or item.get("name")
-        if not model_name:
-            continue
-        try:
-            details = http_json(f"{OLLAMA_ENDPOINT}/api/show", {"model": model_name}, timeout=8)
-            capabilities = details.get("capabilities") or []
-            if "vision" in capabilities or re.search(r"(?:gemma3|llava|qwen.*vl|minicpm-v)", model_name, re.IGNORECASE):
-                vision_model = model_name
-                break
-        except Exception:
-            continue
+    vision_model = select_local_vision_model(models)
     if not vision_model:
         raise RuntimeError("No vision-capable Ollama model is installed. VITAL cannot read this package photo without one.")
 
@@ -2095,7 +2142,7 @@ def read_medicine_package_label(payload: dict[str, Any]) -> dict[str, Any]:
                 "format": "json",
                 "stream": False,
                 "keep_alive": "5m",
-                "options": {"temperature": 0, "num_predict": 220},
+                "options": {"temperature": 0, "num_predict": 220, "num_ctx": 2048, "num_gpu": 0},
             },
             timeout=120,
         )
@@ -2143,18 +2190,7 @@ def screen_health_photo(payload: dict[str, Any]) -> dict[str, Any]:
         models = http_json(f"{OLLAMA_ENDPOINT}/api/tags", timeout=5).get("models", [])
     except Exception as exc:
         raise RuntimeError("VITAL could not reach local Ollama. The photo was not sent to an external service.") from exc
-    vision_model = None
-    for item in models[:8]:
-        model_name = item.get("model") or item.get("name")
-        if not model_name:
-            continue
-        try:
-            details = http_json(f"{OLLAMA_ENDPOINT}/api/show", {"model": model_name}, timeout=8)
-            if "vision" in (details.get("capabilities") or []) or re.search(r"(?:gemma3|llava|qwen.*vl|minicpm-v)", model_name, re.IGNORECASE):
-                vision_model = model_name
-                break
-        except Exception:
-            continue
+    vision_model = select_local_vision_model(models)
     if not vision_model:
         raise RuntimeError("No vision-capable Ollama model is installed. The photo was not analyzed.")
     concern_type = str(payload.get("concernType") or "general visible health concern")[:80]
@@ -2172,8 +2208,20 @@ def screen_health_photo(payload: dict[str, Any]) -> dict[str, Any]:
             "model": vision_model,
             "messages": [{"role": "user", "content": prompt, "images": [encoded]}],
             "format": "json", "stream": False, "keep_alive": "5m",
-            "options": {"temperature": 0, "num_predict": 300},
+            "options": {"temperature": 0, "num_predict": 300, "num_ctx": 2048, "num_gpu": 0},
         }, timeout=180)
+    except HTTPError as exc:
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            error_payload = json.loads(error_body)
+            ollama_detail = str(error_payload.get("error") or "").strip()
+        except (ValueError, OSError):
+            ollama_detail = ""
+        detail = f": {ollama_detail[:240]}" if ollama_detail else ""
+        raise RuntimeError(
+            f"Ollama model {vision_model} rejected or stopped during the photo request (HTTP {exc.code}){detail}. "
+            "Check that the installed vision model supports image input. The photo was not sent elsewhere."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"Local photo review failed ({type(exc).__name__}). The photo was not sent elsewhere.") from exc
     content = response.get("message", {}).get("content", "")

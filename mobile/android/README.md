@@ -17,7 +17,7 @@ The project uses Android SDK 37 and Android Gradle Plugin 9.1.1. The YOLO11n pos
 1. Keep the phone and VITAL computer on the same trusted private Wi-Fi. Do not port-forward the VITAL port or use this prototype over public Wi-Fi.
 2. On the computer, run `START VITAL - PHONE CAMERA.cmd`. It restarts VITAL’s local API in private-LAN mode and prints the computer’s Wi-Fi address. If Windows Firewall asks, allow Python on **Private networks only**.
 3. Sign in to VITAL on the computer and open **Camera check**. Confirm the patient agreed, then create a one-time pairing code.
-4. Open the VITAL Phone Camera app on Android. Enter the computer address shown by VITAL (including `:5055`) and the six-digit code, then press **Pair with VITAL**.
+4. Open the VITAL Phone Camera app on Android. Enter the computer address shown by VITAL (including `:5056`), tap **Test connection**, and confirm the screen reports VITAL reachable. Then enter a fresh six-digit code and press **Pair with VITAL**. If the test fails, check that both devices are on the same Wi-Fi and that the computer firewall allows local-subnet TCP 5056.
 5. Confirm consent in the Android app and press **Start camera while locked**. Grant Camera and Notifications permissions. Locking the screen should leave the camera foreground service active; use its notification’s **Stop camera** action to end it.
 
 ## Connect a Fastrack watch
@@ -34,6 +34,6 @@ The watch may sync only some metrics, and measurements can arrive with a delay. 
 ## Limits and privacy
 
 - VITAL keeps only the latest JPEG snapshot in server memory. Android creates a temporary cache file for capture and deletes it after sending. There is no audio or video recording.
-- This prototype uses HTTP on the local network. Use a trusted private Wi-Fi only; do not expose port 5055 to the internet. Pairing codes expire after five minutes and are single-use. The backend stores only a hash of the phone's camera token so pairing survives a backend restart; tokens expire after 30 days and can be revoked from VITAL.
+- This prototype uses HTTP on the local network. Use a trusted private Wi-Fi only; do not expose port 5056 to the internet. Pairing codes expire after five minutes and are single-use. The backend stores only a hash of the phone's camera token so pairing survives a backend restart; tokens expire after 30 days and can be revoked from VITAL.
 - The phone and computer must both stay powered, connected to the same Wi-Fi, and running. Battery, heat, Android vendor policies, or network interruption can stop capture; it is not guaranteed 24/7.
 - Fall detection is an unvalidated prototype heuristic built on general human pose keypoints, not a medical or certified fall detector. It may miss falls or raise false alerts; it cannot determine injury or consciousness. The phone only opens the emergency dialer; it does not call emergency services by itself. Keep a responsible person available and use normal emergency services when needed.

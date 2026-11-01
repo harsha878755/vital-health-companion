@@ -110,12 +110,16 @@ internal class YoloPoseDetector(context: Context) : AutoCloseable {
                 val shoulders = midpoint(points[5], points[6])
                 val hips = midpoint(points[11], points[12])
                 val poseUsable = shoulders != null && hips != null
-                val torsoDx = if (poseUsable) kotlin.math.abs(shoulders!!.first - hips!!.first) else 0f
-                val torsoDy = if (poseUsable) kotlin.math.abs(shoulders!!.second - hips!!.second) else 0f
+                // Keypoints are normalized on each axis independently. Compare
+                // pixel-space distances so a 640x480 camera frame does not make
+                // horizontal torso motion appear shorter than vertical motion.
+                val torsoDx = if (poseUsable) kotlin.math.abs(shoulders!!.first - hips!!.first) * bitmap.width else 0f
+                val torsoDy = if (poseUsable) kotlin.math.abs(shoulders!!.second - hips!!.second) * bitmap.height else 0f
                 // Person boxes include blankets, arms, and bent legs and can be
                 // nearly square even when the torso is clearly horizontal. Use
                 // the shoulder-to-hip axis as the primary posture signal.
-                val horizontal = poseUsable && torsoDx > 0.015f && torsoDx > torsoDy * 1.15f
+                val minTorsoSpanPx = min(bitmap.width, bitmap.height) * MIN_TORSO_SPAN_RATIO
+                val horizontal = poseUsable && torsoDx > minTorsoSpanPx && torsoDx > torsoDy * HORIZONTAL_AXIS_RATIO
                 val torsoAngle = if (poseUsable) Math.toDegrees(kotlin.math.atan2(torsoDy.toDouble(), torsoDx.toDouble())).toFloat() else 0f
                 val visibleLandmarks = points.count { it.confidence >= KEYPOINT_CONFIDENCE_THRESHOLD }
                 return YoloPose(
@@ -182,5 +186,7 @@ internal class YoloPoseDetector(context: Context) : AutoCloseable {
         private const val PREDICTION_COUNT = 8400
         private const val PERSON_CONFIDENCE_THRESHOLD = 0.35f
         private const val KEYPOINT_CONFIDENCE_THRESHOLD = 0.25f
+        private const val MIN_TORSO_SPAN_RATIO = 0.015f
+        private const val HORIZONTAL_AXIS_RATIO = 1.15f
     }
 }

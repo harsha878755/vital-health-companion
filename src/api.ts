@@ -18,6 +18,7 @@ import {
   WearableReading,
   WearableSummary
 } from "./types";
+import { VitalLanguage } from "./i18n";
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
@@ -84,12 +85,12 @@ export async function postTriage(payload: TriagePayload) {
   return postJson<TriageResponse>("/api/triage", payload);
 }
 
-export async function postHealthQuestion(question: string, context: Record<string, string | number>, history: Array<{ role: "user" | "assistant"; text: string }>) {
-  return postJson<{ answer: string; urgent: boolean; mode: string; suggestions?: string[] }>("/api/assistant/chat", { question, context, history });
+export async function postHealthQuestion(question: string, context: Record<string, string | number>, history: Array<{ role: "user" | "assistant"; text: string }>, language: VitalLanguage = "en") {
+  return postJson<{ answer: string; urgent: boolean; mode: string; suggestions?: string[] }>("/api/assistant/chat", { question, context, history, language });
 }
 
-export async function transcribeAssistantVoice(audioBase64: string) {
-  return postJson<{ transcription: string; engine: string }>("/api/assistant/transcribe", { audioBase64 });
+export async function transcribeAssistantVoice(audioBase64: string, language: VitalLanguage = "en") {
+  return postJson<{ transcription: string; engine: string }>("/api/assistant/transcribe", { audioBase64, language });
 }
 
 export async function postAppointment(appointment: Appointment & { patientPhone?: string; caretakerPhone?: string }) {

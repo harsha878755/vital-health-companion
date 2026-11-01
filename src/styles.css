@@ -1053,6 +1053,10 @@ select:focus {
 .manual-checks button {
   font-weight: 800;
 }
+.manual-checks .witness-dose-button { border-color: color-mix(in srgb, var(--teal) 55%, var(--line)); background: color-mix(in srgb, var(--teal) 13%, var(--panel-strong)); }
+.caregiver-witness-note { margin: .55rem 0 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.dose-checkins-legend i.witnessed { border-color: #5274d8; background: #5274d8; }
+.medication-page .med-stat.witnessed .med-stat-icon { background: color-mix(in srgb, #5274d8 16%, var(--panel-strong)); color: #5274d8; }
 
 .scoreline {
   padding: 0.8rem;
@@ -3712,6 +3716,7 @@ select:focus {
 .med-stat-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
 .med-stat.photo-checked .med-stat-icon { background: color-mix(in srgb, #16876c 14%, var(--panel-strong)); color: #16876c; }
 .med-status-track i.photo-checked { background: #4f92d8; }
+.med-status-track i.witnessed { background: #5274d8; }
 .dose-list article { align-items: center; min-width: 0; }
 .dose-list article > div { flex: 1 1 auto; min-width: 0; }
 .dose-time-field { display: grid; flex: 0 0 9.5rem; gap: .25rem; color: var(--muted); font-size: .67rem; font-weight: 800; }
@@ -3989,6 +3994,11 @@ select:focus {
 .assistant-header > button[aria-pressed="false"] { opacity: 0.58; }
 .assistant-header .voice-replies-enabled { color: var(--teal-dark); }
 .assistant-header .voice-replies-muted { color: var(--muted); }
+.language-picker { display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); font-size: .7rem; font-weight: 750; }
+.language-picker select { min-height: 2rem; max-width: 8.5rem; padding: .3rem .55rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel-strong); color: var(--ink); font: inherit; font-size: .75rem; cursor: pointer; }
+.auth-language-picker { justify-content: flex-end; margin: 0 0 .5rem; }
+.auth-language-picker select { background: var(--panel); }
+.app[data-language="hi"], .app[data-language="kn"], .auth-screen:has(.auth-language-picker) { font-family: "Noto Sans Kannada", "Noto Sans Devanagari", "Nirmala UI", system-ui, sans-serif; }
 .assistant-listen-message { display: inline-flex; align-items: center; gap: 0.3rem; margin-top: 0.5rem; padding: 0.25rem 0.45rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--teal-dark); font: inherit; font-size: 0.65rem; font-weight: 750; cursor: pointer; }
 .assistant-listen-message svg { width: 0.8rem; height: 0.8rem; }
 .assistant-disclaimer { margin: 0; padding: 0 0.95rem 0.45rem; color: var(--muted); font-size: 0.65rem; line-height: 1.4; }
@@ -4435,6 +4445,10 @@ button:disabled {
 .dose-edit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
 .dose-edit-grid label { display: grid; min-width: 0; gap: .25rem; color: var(--muted); font-size: .67rem; font-weight: 800; }
 .dose-edit-grid input { width: 100%; min-width: 0; min-height: 2.4rem; padding: .4rem .55rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel-strong); color: var(--ink); font: inherit; font-size: .8rem; }
+.prescription-dose-remove { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: .35rem; min-height: 2.4rem; padding: .4rem .6rem; border: 1px solid color-mix(in srgb, var(--coral) 42%, var(--line)); border-radius: .65rem; background: color-mix(in srgb, var(--coral) 9%, var(--panel)); color: var(--coral); font: inherit; font-size: .76rem; font-weight: 800; cursor: pointer; }
+.prescription-dose-remove:hover { background: color-mix(in srgb, var(--coral) 16%, var(--panel)); }
+.prescription-dose-remove svg { width: 1rem; height: 1rem; }
+.prescription-dose-remove:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .backup-reminder { margin: 0; padding: .7rem .8rem; border: 1px solid color-mix(in srgb, var(--teal) 28%, var(--line)); border-radius: .75rem; background: color-mix(in srgb, var(--teal) 8%, var(--panel)); color: var(--ink); font-size: .78rem; line-height: 1.45; }
 .backup-reminder.overdue { border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); background: color-mix(in srgb, var(--amber) 14%, var(--panel)); }
 .app[data-high-contrast="true"] { --muted: color-mix(in srgb, var(--ink) 82%, var(--bg)); --line: color-mix(in srgb, var(--ink) 42%, var(--bg)); }

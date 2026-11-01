@@ -10,13 +10,18 @@ from typing import Any
 
 
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "vosk-model-small-en-in-0.4"
+WHISPER_MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "whisper-tiny"
 MAX_AUDIO_BYTES = 600_000
 MAX_AUDIO_SECONDS = 12
 _MODEL_LOCK = threading.Lock()
 _MODEL: Any | None = None
+_WHISPER_MODEL: Any | None = None
 
 
 def transcribe_wav(payload: dict[str, Any]) -> dict[str, Any]:
+    language = str(payload.get("language") or "en").lower()
+    if language not in {"en", "hi", "kn"}:
+        language = "en"
     encoded = payload.get("audioBase64")
     if not isinstance(encoded, str) or not encoded or len(encoded) > MAX_AUDIO_BYTES * 4 // 3 + 16:
         raise ValueError("Record a short voice question and try again.")
@@ -33,6 +38,9 @@ def transcribe_wav(payload: dict[str, Any]) -> dict[str, Any]:
             raise
         raise ValueError("VITAL could not read that voice recording. Please record it again.") from exc
 
+    if language in {"hi", "kn"}:
+        return _transcribe_multilingual(frames, language)
+
     model = _get_model()
     try:
         from vosk import KaldiRecognizer
@@ -45,6 +53,43 @@ def transcribe_wav(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Local speech recognition failed. Restart VITAL and try again.") from exc
 
     return {"transcription": str(result.get("text") or "").strip()[:1500], "engine": "Vosk local Indian English"}
+
+
+def _transcribe_multilingual(frames: bytes, language: str) -> dict[str, Any]:
+    """Use a local multilingual Whisper model for Hindi and Kannada audio."""
+    import numpy as np
+
+    model = _get_whisper_model()
+    audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    try:
+        segments, _info = model.transcribe(audio, language=language, beam_size=1, vad_filter=True)
+        text = " ".join(segment.text.strip() for segment in segments if segment.text.strip())
+    except Exception as exc:
+        raise RuntimeError("Local multilingual speech recognition failed. Restart VITAL and try again.") from exc
+    return {"transcription": text[:1500], "engine": "Whisper tiny local multilingual"}
+
+
+def _get_whisper_model() -> Any:
+    global _WHISPER_MODEL
+    if _WHISPER_MODEL is not None:
+        return _WHISPER_MODEL
+    with _MODEL_LOCK:
+        if _WHISPER_MODEL is not None:
+            return _WHISPER_MODEL
+        try:
+            from faster_whisper import WhisperModel
+
+            # First Hindi/Kannada use downloads the small multilingual model to
+            # this ignored local models directory; audio is still processed here.
+            _WHISPER_MODEL = WhisperModel(
+                "tiny", device="cpu", compute_type="int8", download_root=str(WHISPER_MODEL_PATH)
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Hindi/Kannada offline speech support needs a one-time local model download. "
+                "Connect to the internet, restart VITAL, and try again."
+            ) from exc
+    return _WHISPER_MODEL
 
 
 def _get_model() -> Any:

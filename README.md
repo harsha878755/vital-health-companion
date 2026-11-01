@@ -9,10 +9,10 @@ Important claim boundary: VITAL is not clinically validated and does not diagnos
 Requirements: Windows 10/11, Node.js 20 or newer, Python 3.10 or newer, and internet access for the first dependency installation.
 
 1. Extract the shared ZIP into a permanent folder. Do not run it from inside the ZIP preview.
-2. Double-click `START VITAL.cmd`. On first launch, VITAL installs its frontend and Python dependencies, builds the app, starts both local services, and opens `http://127.0.0.1:5186`.
+2. Double-click `START VITAL.cmd`. On first launch, VITAL installs its frontend and Python dependencies, builds the app, starts both local services, and opens `http://127.0.0.1:5187`.
 3. To start VITAL automatically after you sign in to Windows, right-click `install-vital-startup.ps1`, choose **Run with PowerShell**, and approve the script if Windows asks. This is a one-time per-user setup. Keep the extracted folder in the same location afterward; if you move it, run the installer again.
 
-The startup launcher checks the VITAL backend health endpoint and the served frontend before opening the app. It is safe to run more than once: already-healthy VITAL services are reused. Logs are written to `runtime-logs` if startup needs troubleshooting. VITAL uses ports 5055 and 5186; CyberSahay on port 5173 is separate.
+The startup launcher checks the VITAL backend health endpoint and the served frontend before opening the app. It is safe to run more than once: already-healthy VITAL services are reused. Logs are written to `runtime-logs` if startup needs troubleshooting. VITAL uses ports 5056 and 5187; CyberSahay on port 5173 is separate.
 
 ## Account and session
 
@@ -32,7 +32,7 @@ For development, run `npm run dev` from this folder and start the local API with
 
 Select **Ask VITAL** in the lower-right corner from any screen. Type a question or select the microphone to dictate it; after you pause, VITAL submits the recognized question. Assistant replies to voice questions are spoken aloud when spoken replies are enabled. Use **Listen** on an assistant message to replay it, or toggle the speaker button in the header to turn automatic spoken replies on or off. Ask about the current triage result, readings, medication schedule, or preparing for an appointment. VITAL uses an available local LM Studio/Ollama model when configured; without one, it provides offline help for common questions. Chat messages and the selected current-session context are sent only to the VITAL service running on this computer and are not saved as chat history. No question is sent to a cloud AI service.
 
-Voice input records a short question through the browser microphone and sends the recording only to the VITAL backend running on this computer. The backend transcribes it locally with Vosk and the small Indian English speech model; VITAL does not use the browser speech-recognition service or send the recording to a cloud speech provider. The first launch downloads the Vosk package and its approximately 36 MB model while online. After setup, transcription works offline. The browser still needs microphone permission and a secure context (localhost is supported). Spoken replies use the browser/device text-to-speech voice and can be replayed from each answer.
+Voice input records a short question through the browser microphone and sends the recording only to the VITAL backend running on this computer. English uses Vosk and the Indian English speech model; Hindi and Kannada use a local multilingual Whisper model. The first Hindi/Kannada voice use downloads that model while online; subsequent recognition runs locally. VITAL does not send recordings to a cloud speech provider. The browser still needs microphone permission and a secure context (localhost is supported). Spoken replies use the browser/device text-to-speech voice for the selected language, when that voice is installed, and can be replayed from each answer.
 
 To enable open-ended answers, install and run a model in LM Studio or Ollama, then start VITAL. The assistant still provides general information only; it cannot diagnose, prescribe, or contact emergency services. For urgent symptoms in India, call 112.
 
@@ -100,7 +100,7 @@ Medication verification is adherence support only. After analyzing a prescriptio
 
 ### Voice dictation
 
-Ask VITAL uses local Vosk speech recognition in the Python backend. During first-time setup, VITAL installs the Vosk dependency and downloads the Indian English model into `backend/models` (ignored by Git because it is a runtime asset). The launcher downloads it once while internet is available; subsequent voice transcription runs offline. Record up to 12 seconds, then tap stop to transcribe and submit. Microphone audio is sent to the local VITAL backend on this computer only. Spoken answers use the device's browser text-to-speech voice.
+Ask VITAL uses local speech recognition in the Python backend: Vosk for English and faster-whisper's multilingual tiny model for Hindi and Kannada. English model setup happens at first launch; the Hindi/Kannada model downloads on first use, so connect to the internet for those first runs. Model files are ignored by Git as runtime assets. After download, voice transcription runs locally. Record up to 12 seconds, then tap stop to transcribe and submit. Microphone audio is sent to the local VITAL backend on this computer only. Spoken answers use the device's browser text-to-speech voice; Hindi/Kannada playback depends on the matching system voice being installed.
 
 ## Verification
 

@@ -6,8 +6,8 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
-$frontendPort = 5186
-$backendPort = 5055
+$frontendPort = 5187
+$backendPort = 5056
 $logDir = Join-Path $root "runtime-logs"
 $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 $frontendLog = Join-Path $logDir "frontend.log"
@@ -28,7 +28,32 @@ function Find-CommandPath([string]$name) {
 }
 
 function Test-ListeningPort([int]$port) {
-  return $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1)
+  $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+  if ($port -eq $backendPort) {
+    foreach ($process in Get-VitalBackendProcesses) {
+      $ownedListener = Get-NetTCPConnection -OwningProcess $process.ProcessId -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -eq $port -and $_.RemotePort -eq 0 } | Select-Object -First 1
+      if ($ownedListener) { return $true }
+    }
+  }
+  return $null -ne ($listeners | Where-Object { $_.OwningProcess -ne 0 } | Select-Object -First 1)
+}
+
+function Get-VitalBackendProcesses {
+  $serverPattern = '(?:^|\s)["'']?backend[\\/]server\.py(?:["'']|\s|$)'
+  return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine -match $serverPattern
+  })
+}
+
+function Get-VitalBackendListeners {
+  foreach ($process in Get-VitalBackendProcesses) {
+    $sockets = Get-NetTCPConnection -OwningProcess $process.ProcessId -ErrorAction SilentlyContinue |
+      Where-Object { $_.LocalPort -eq $backendPort -and $_.RemotePort -eq 0 }
+    foreach ($socket in $sockets) {
+      [pscustomobject]@{ Process = $process; Socket = $socket }
+    }
+  }
 }
 
 function Get-HttpResponse([string]$url) {
@@ -85,11 +110,11 @@ if (-not (Test-Path $venvPython)) {
   if ($LASTEXITCODE -ne 0) { throw "Could not install backend dependencies." }
 }
 
-$voskInstalled = $false
-& $venvPython -c "import vosk" 2>$null
-if ($LASTEXITCODE -eq 0) { $voskInstalled = $true }
-if (-not $voskInstalled) {
-  Write-Host "Installing local voice recognition dependency..."
+$voicePackagesInstalled = $false
+& $venvPython -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('vosk') and importlib.util.find_spec('faster_whisper') else 1)"
+if ($LASTEXITCODE -eq 0) { $voicePackagesInstalled = $true }
+if (-not $voicePackagesInstalled) {
+  Write-Host "Installing local English, Hindi, and Kannada voice recognition dependencies..."
   & $venvPython -m pip install -r (Join-Path $root "backend\requirements.txt")
   if ($LASTEXITCODE -ne 0) { throw "Could not install local voice recognition. Check your internet connection, then retry START VITAL.cmd." }
 }
@@ -116,8 +141,9 @@ if ($frontendNeedsBuild) {
 $backendHealth = Get-HttpResponse "http://127.0.0.1:$backendPort/api/health"
 if ($null -ne $backendHealth) {
   $transcriptionRouteReady = Test-AssistantTranscriptionRoute
-  $listener = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-  $owner = if ($listener) { Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
+  $ownedListener = Get-VitalBackendListeners | Select-Object -First 1
+  $listener = if ($ownedListener) { $ownedListener.Socket } else { Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 }
+  $owner = if ($ownedListener) { $ownedListener.Process } elseif ($listener -and $listener.OwningProcess -ne 0) { Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
   $expectedServerPath = Join-Path $root "backend\server.py"
   $ownerIsVitalBackend = $owner -and (
     $owner.CommandLine -like "*$expectedServerPath*" -or
@@ -140,9 +166,15 @@ if ($null -ne $backendHealth) {
   }
 }
 if ($EnablePhoneCamera -and $null -ne $backendHealth) {
-  $listenerAddresses = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalAddress -Unique
-  $connection = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-  $owner = if ($connection) { Get-CimInstance Win32_Process -Filter "ProcessId = $($connection.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
+  $ownedListeners = @(Get-VitalBackendListeners)
+  $listenerAddresses = if ($ownedListeners.Count -gt 0) {
+    $ownedListeners | ForEach-Object { $_.Socket.LocalAddress } | Select-Object -Unique
+  } else {
+    Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalAddress -Unique
+  }
+  $ownedListener = $ownedListeners | Select-Object -First 1
+  $connection = if ($ownedListener) { $ownedListener.Socket } else { Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 }
+  $owner = if ($ownedListener) { $ownedListener.Process } elseif ($connection -and $connection.OwningProcess -ne 0) { Get-CimInstance Win32_Process -Filter "ProcessId = $($connection.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
   $expectedServerPath = Join-Path $root "backend\server.py"
   $ownerIsVitalBackend = $owner -and (
     $owner.CommandLine -like "*$expectedServerPath*" -or
@@ -212,7 +244,7 @@ if ($EnablePhoneCamera) {
       Select-Object -ExpandProperty IPAddress -Unique
   }
   Write-Host "Phone camera LAN mode is enabled. Enter this Wi-Fi address in the Android app:"
-  foreach ($address in $phoneAddresses) { Write-Host "  http://${address}:5055" }
+  foreach ($address in $phoneAddresses) { Write-Host "  http://${address}:$backendPort" }
   Write-Host "Keep this computer running and both devices on the same trusted Wi-Fi."
 }
 if ($OpenBrowser) { Start-Process "http://127.0.0.1:$frontendPort/" }

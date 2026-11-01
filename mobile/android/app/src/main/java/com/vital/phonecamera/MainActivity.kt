@@ -75,6 +75,8 @@ import java.time.temporal.ChronoUnit
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+private const val OFFLINE_VIDEO_SAMPLE_INTERVAL_MS = 300L
+
 class MainActivity : ComponentActivity() {
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(HeartRateRecord::class),
@@ -130,6 +132,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var codeField: EditText
     private lateinit var consentBox: CheckBox
     private lateinit var medicationConsentBox: CheckBox
+    private lateinit var connectionStatusText: TextView
     private lateinit var statusText: TextView
     private lateinit var phoneOverviewValue: TextView
     private lateinit var watchOverviewValue: TextView
@@ -227,10 +230,13 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = color("#101F30")
         window.navigationBarColor = color("#101F30")
         window.decorView.systemUiVisibility = 0
+        val savedServer = prefs.getString("server", "").orEmpty()
+        val migratedServer = savedServer.replace(Regex(":5055$"), ":5056")
+        if (savedServer != migratedServer) prefs.edit().putString("server", migratedServer).apply()
         addressField = EditText(this).apply {
-            hint = "Computer address, e.g. http://192.168.1.20:5055"
+            hint = "Computer address, e.g. http://192.168.1.20:5056"
             setSingleLine(true)
-            setText(prefs.getString("server", ""))
+            setText(migratedServer)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
             styleInput(this)
         }
@@ -420,9 +426,16 @@ class MainActivity : ComponentActivity() {
         val pairingCard = section("Connect to VITAL", "Use the computer address and one-time code shown on the VITAL dashboard.")
         pairingCard.addView(label("VITAL computer address"))
         pairingCard.addView(addressField, fieldParams())
+        pairingCard.addView(secondaryButton("Test connection") { testVitalConnection() }, fieldParams())
         pairingCard.addView(label("One-time pairing code"))
         pairingCard.addView(codeField, fieldParams())
         pairingCard.addView(actionButton("Pair with VITAL") { pairWithVital() }, fieldParams())
+        connectionStatusText = bodyText("Enter the computer address and tap Test connection.").apply {
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded("#203F5B", 12, "#2E5872")
+            contentDescription = "Phone connection status"
+        }
+        pairingCard.addView(connectionStatusText, fieldParams())
         connectPage.addView(pairingCard, cardParams())
 
         val smsCard = section("Phone SMS fallback", "When Twilio is unavailable, the paired phone can submit visit reminders, medicine reminders, health tips, and caregiver alerts using its SIM. Keep VITAL open or the camera service running. Carrier charges may apply.")
@@ -599,11 +612,37 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
 
+    private fun testVitalConnection() {
+        val base = normalizedBaseUrl() ?: run {
+            setStatus("Enter the full computer address shown in VITAL, including http:// and :5056.")
+            return
+        }
+        setConnectionStatus("Checking VITAL at $base…")
+        network.execute {
+            try {
+                val request = Request.Builder().url("$base/api/health").get().build()
+                OkHttpClient.Builder().callTimeout(8, TimeUnit.SECONDS).build().newCall(request).execute().use { response ->
+                    val payload = JSONObject(response.body?.string().orEmpty())
+                    if (!response.isSuccessful || !payload.optBoolean("ok")) {
+                        throw IllegalStateException("Address responded, but it is not a healthy VITAL service (HTTP ${response.code}).")
+                    }
+                    val service = payload.optString("service", "VITAL")
+                    runOnUiThread { setConnectionStatus("Connected to $service at $base. Now enter a fresh six-digit code and press Pair with VITAL.") }
+                }
+            } catch (error: Exception) {
+                val detail = error.cause?.message ?: error.message ?: error.javaClass.simpleName
+                runOnUiThread {
+                    setConnectionStatus("Cannot reach $base. Check that both devices share Wi-Fi, use the current address from the laptop, and keep VITAL running. Network detail: $detail")
+                }
+            }
+        }
+    }
+
     private fun pairWithVital() {
         val base = normalizedBaseUrl() ?: run { setStatus("Enter the computer address shown in VITAL."); return }
         val code = codeField.text.toString().trim()
         if (!code.matches(Regex("\\d{6}"))) { setStatus("Enter the 6-digit pairing code shown in VITAL."); return }
-        setStatus("Pairing…")
+        setConnectionStatus("Pairing with VITAL…")
         network.execute {
             try {
                 val body = JSONObject().put("pairingCode", code).toString().toRequestBody("application/json".toMediaType())
@@ -612,10 +651,10 @@ class MainActivity : ComponentActivity() {
                     val result = JSONObject(response.body?.string().orEmpty())
                     if (!response.isSuccessful) throw IllegalStateException(result.optString("error", "Pairing failed."))
                     prefs.edit().putString("server", base).putString("token", result.getString("cameraToken")).apply()
-                    runOnUiThread { setStatus("Paired. For camera use, get separate patient agreement before tapping Start.") }
+                    runOnUiThread { setConnectionStatus("Paired. Get separate patient agreement before tapping Start camera.") }
                 }
             } catch (error: Exception) {
-                runOnUiThread { setStatus(error.message ?: "Could not pair. Check the Wi-Fi address and pairing code.") }
+                runOnUiThread { setConnectionStatus(error.message ?: "Could not pair. Check the Wi-Fi address and pairing code.") }
             }
         }
     }
@@ -1005,9 +1044,13 @@ class MainActivity : ComponentActivity() {
             detector = activeDetector
             val scanLimitMs = durationMs
             var timeMs = 0L
-            val sampleIntervalMs = CameraRelayService.FRAME_INTERVAL_MS
+            // Offline playback has no camera/network latency budget. Sample more
+            // densely than the live relay so brief horizontal poses and the
+            // upright-to-horizontal transition are not skipped between frames.
+            val sampleIntervalMs = OFFLINE_VIDEO_SAMPLE_INTERVAL_MS
             var usableFrames = 0
-            var sawHorizontalPosture = false
+            var horizontalPostureSamples = 0
+            var horizontalPosturePreview: ByteArray? = null
             var possibleFallAtMs: Long? = null
             var verificationStartedAtMs = 0L
             var verificationBadPoseSinceMs = 0L
@@ -1035,7 +1078,7 @@ class MainActivity : ComponentActivity() {
                             previousPose = pose
                         }
 
-                        if (pose != null && pose.poseUsable && pose.torsoHorizontal) sawHorizontalPosture = true
+                        if (pose != null && pose.poseUsable && pose.torsoHorizontal) horizontalPostureSamples++
                         val now = observedAtMs
                         if (verificationStartedAtMs > 0L) {
                             if (pose != null && pose.poseUsable && pose.torsoHorizontal) {
@@ -1096,6 +1139,12 @@ class MainActivity : ComponentActivity() {
                             descentSpeed,
                             secondsRemaining
                         )
+                        if (pose != null && pose.poseUsable && pose.torsoHorizontal) {
+                            // Keep a representative horizontal frame visible after
+                            // scanning; otherwise the final upright frame can hide
+                            // a successful posture detection from the user.
+                            horizontalPosturePreview = annotation
+                        }
                         val preview = BitmapFactory.decodeByteArray(annotation, 0, annotation.size)
                         if (preview != null) {
                             runOnUiThread {
@@ -1117,14 +1166,24 @@ class MainActivity : ComponentActivity() {
 
             val result = if (possibleFallAtMs != null) {
                 "A rapid upright-to-horizontal descent followed by stillness matched the possible-fall rule near ${possibleFallAtMs!! / 1_000}s. Review the highlighted frames. A deliberate staged fall can look the same to this camera-only model. No alert, SMS, or call was made."
-            } else if (sawHorizontalPosture) {
-                "Horizontal/resting posture was detected without a confirmed rapid upright-to-horizontal descent followed by stillness. This does not rule out a real fall; the camera cannot infer intent. No alert, SMS, or call was made."
+            } else if (horizontalPostureSamples > 0) {
+                "YOLO recognized a horizontal torso in $horizontalPostureSamples sampled frames, but no rapid upright-to-horizontal descent followed by stillness was confirmed. This does not rule out a real fall; the camera cannot infer intent. No alert, SMS, or call was made."
             } else if (usableFrames == 0) {
                 "The YOLO model could not find a clear person pose. Try a brighter clip with the person's full body visible. No alert, SMS, or call was made."
             } else {
-                "No possible-fall movement sequence was confirmed in $usableFrames sampled frames. This does not rule out a fall or unconsciousness. No alert, SMS, or call was made."
+                "YOLO found a person in $usableFrames sampled frames but did not classify the torso as horizontal. Keep the full person visible, use a side-on camera view, and avoid heavy occlusion. No alert, SMS, or call was made."
             }
             runOnUiThread {
+                if (possibleFallAtMs == null && horizontalPosturePreview != null && ::offlinePreviewImage.isInitialized) {
+                    val previewBytes = horizontalPosturePreview!!
+                    val preview = BitmapFactory.decodeByteArray(previewBytes, 0, previewBytes.size)
+                    if (preview != null) {
+                        offlinePreviewImage.setImageBitmap(preview)
+                        offlinePreviewImage.visibility = View.VISIBLE
+                        offlinePreviewBitmap?.takeIf { it !== preview && !it.isRecycled }?.recycle()
+                        offlinePreviewBitmap = preview
+                    }
+                }
                 postureTestText.text = result
                 if (possibleFallAtMs != null && !isFinishing && !isDestroyed) {
                     showOfflinePossibleFallResult(possibleFallAtMs!!)
@@ -1171,6 +1230,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    private fun setConnectionStatus(message: String) {
+        setStatus(message)
+        if (::connectionStatusText.isInitialized) connectionStatusText.text = message
+    }
     private fun setStatus(message: String) {
         statusText.text = message
         if (::phoneOverviewValue.isInitialized) refreshOverview()

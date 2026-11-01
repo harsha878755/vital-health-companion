@@ -1,5 +1,5 @@
 const { chromium } = require("playwright");
-const vitalUrl = process.env.VITAL_URL || "http://127.0.0.1:5186/";
+const vitalUrl = process.env.VITAL_URL || "http://127.0.0.1:5187/";
 
 async function run() {
   const browser = await chromium.launch({ headless: true });

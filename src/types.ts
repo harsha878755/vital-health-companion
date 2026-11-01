@@ -106,7 +106,7 @@ export interface MedicationLog {
   id: string;
   time: string;
   label: string;
-  status: "Verified" | "Missed" | "Pending" | "Photo checked";
+  status: "Verified" | "Witnessed" | "Missed" | "Pending" | "Photo checked";
   confidence: number;
   dateKey?: string;
   doseKey?: string;

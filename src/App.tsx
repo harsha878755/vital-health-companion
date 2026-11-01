@@ -40,6 +40,7 @@ import {
   Square,
   Stethoscope,
   TimerReset,
+  Trash2,
   Upload,
   UserRound,
   Users,
@@ -97,6 +98,7 @@ import {
 import { accountStorageKey, useStoredState } from "./hooks/useStoredState";
 import { createHealthReportPdf } from "./healthReportPdf";
 import { defaultPalette, PaletteId, palettes } from "./theme";
+import { applyUiLanguage, languageNames, VitalLanguage } from "./i18n";
 import {
   Appointment,
   HealthState,
@@ -552,8 +554,17 @@ function ThemeSwitcher({ palette, setPalette }: { palette: PaletteId; setPalette
 
 function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [uiLanguage, setUiLanguage] = useState<VitalLanguage>(() => {
+    const saved = window.localStorage.getItem("vital.language");
+    return saved === "hi" || saved === "kn" ? saved : "en";
+  });
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
+
+  useEffect(() => {
+    window.localStorage.setItem("vital.language", uiLanguage);
+    return applyUiLanguage(uiLanguage);
+  }, [uiLanguage]);
 
   useEffect(() => {
     let active = true;
@@ -591,15 +602,15 @@ function App() {
   }
 
   if (!authReady) return <AuthLoading error="" onRetry={() => window.location.reload()} />;
-  if (!authUser) return <AuthScreen onAuthenticated={acceptAuth} initialError={authError} />;
-  return <VitalDashboard authUser={authUser} onLogout={() => void signOut()} />;
+  if (!authUser) return <AuthScreen language={uiLanguage} setLanguage={setUiLanguage} onAuthenticated={acceptAuth} initialError={authError} />;
+  return <VitalDashboard language={uiLanguage} setLanguage={setUiLanguage} authUser={authUser} onLogout={() => void signOut()} />;
 }
 
 function AuthLoading({ error, onRetry }: { error: string; onRetry: () => void }) {
   return <main className="auth-screen"><section className="auth-card"><div className="auth-brand"><span><HeartPulse /></span><div><strong>VITAL</strong><small>Personal health, protected</small></div></div><div className="auth-loading"><span className="auth-spinner" /><p>{error || "Checking your secure session…"}</p>{error ? <button type="button" onClick={onRetry}>Try again</button> : null}</div></section></main>;
 }
 
-function AuthScreen({ onAuthenticated, initialError }: { onAuthenticated: (user: AuthUser) => void; initialError: string }) {
+function AuthScreen({ language, setLanguage, onAuthenticated, initialError }: { language: VitalLanguage; setLanguage: (language: VitalLanguage) => void; onAuthenticated: (user: AuthUser) => void; initialError: string }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -626,6 +637,7 @@ function AuthScreen({ onAuthenticated, initialError }: { onAuthenticated: (user:
   return <main className="auth-screen">
     <div className="auth-glow auth-glow-one" /><div className="auth-glow auth-glow-two" />
     <section className="auth-card">
+      <label className="language-picker auth-language-picker"><span>Language</span><select value={language} onChange={(event) => setLanguage(event.target.value as VitalLanguage)} aria-label="Language">{(Object.keys(languageNames) as VitalLanguage[]).map((item) => <option key={item} value={item}>{languageNames[item]}</option>)}</select></label>
       <div className="auth-brand"><span><HeartPulse /></span><div><strong>VITAL</strong><small>Your health, all in one place</small></div></div>
       <div className="auth-welcome"><span className="auth-eyebrow">PRIVATE HEALTH SPACE</span><h1>{mode === "register" ? "Create your account" : "Welcome back"}</h1><p>{mode === "register" ? "Register once to keep your health activity under your account on this device." : "Sign in once. VITAL will remember this device for your next visit."}</p></div>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
@@ -640,7 +652,7 @@ function AuthScreen({ onAuthenticated, initialError }: { onAuthenticated: (user:
   </main>;
 }
 
-function VitalDashboard({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => void }) {
+function VitalDashboard({ language: uiLanguage, setLanguage: setUiLanguage, authUser, onLogout }: { language: VitalLanguage; setLanguage: (language: VitalLanguage) => void; authUser: AuthUser; onLogout: () => void }) {
   const [tab, setTab] = useState<TabId>("dashboard");
   const activePage = tabs.find((item) => item.id === tab) ?? tabs[0];
   const [cameraConsentConfirmed, setCameraConsentConfirmed] = useState(false);
@@ -908,7 +920,7 @@ function VitalDashboard({ authUser, onLogout }: { authUser: AuthUser; onLogout: 
   }
 
   const medicationScore = useMemo(() => {
-    const completed = medicationLogs.filter((log) => log.status === "Verified").length;
+    const completed = medicationLogs.filter((log) => log.status === "Verified" || log.status === "Witnessed").length;
     const adherenceEvents = medicationLogs.filter((log) => log.status !== "Photo checked").length;
     return safeScore(adherenceEvents ? (completed / adherenceEvents) * 100 : 0);
   }, [medicationLogs]);
@@ -1071,6 +1083,8 @@ addTimelineEvent(
   label,
   status === "Photo checked"
     ? `Camera frame similarity to the locally enrolled reference views: ${confidence}%. Appearance similarity is not pill identity and does not confirm ingestion.`
+    : status === "Witnessed"
+      ? `Caregiver report recorded: ${label}. The caregiver says they directly observed a swallow. This does not prove absorption; no video was recorded.`
     : `Medication check recorded with ${confidence}% confidence.`,
   status
 );
@@ -1092,6 +1106,17 @@ addTimelineEvent(
     if (oldKey !== newKey) {
       setMedicationLogs((logs) => logs.map((log) => log.doseKey === oldKey ? { ...log, doseKey: newKey } : log));
     }
+  }
+
+  function removePrescriptionDose(index: number) {
+    if (!prescriptionPlan) return;
+    const removed = prescriptionPlan.doses[index];
+    if (!removed) return;
+    const removedKey = medicationDoseKey(removed);
+    const doses = prescriptionPlan.doses.filter((_, doseIndex) => doseIndex !== index);
+    setPrescriptionPlan(doses.length ? { ...prescriptionPlan, humanReviewed: false, doses } : null);
+    setMedicationLogs((logs) => logs.filter((log) => log.doseKey !== removedKey));
+    addTimelineEvent("prescription", "Prescription entry removed", `Removed the extracted medicine entry “${removed.medication}” for manual correction.`, "Manual correction");
   }
 
   async function analyzePrescription(text = prescriptionText) {
@@ -1246,7 +1271,7 @@ addTimelineEvent(
   }
 
   return (
-    <div className="app" data-theme={palette} data-large-text={accessibility.largeText} data-high-contrast={accessibility.highContrast}>
+    <div className="app" data-theme={palette} data-large-text={accessibility.largeText} data-high-contrast={accessibility.highContrast} data-language={uiLanguage}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
       <aside className="sidebar">
         <div className="brand">
@@ -1289,6 +1314,9 @@ addTimelineEvent(
             <p>{pageDescriptions[activePage.id]}</p>
           </div>
           <div className="topbar-actions">
+            <label className="language-picker"><span>Language</span><select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as VitalLanguage)} aria-label="Language">
+              {(Object.keys(languageNames) as VitalLanguage[]).map((language) => <option key={language} value={language}>{languageNames[language]}</option>)}
+            </select></label>
             <ThemeSwitcher palette={palette} setPalette={setPalette} />
             <StateBadge state={triageAssessed ? triage.state : "Not assessed"} />
             <span className={`api-status ${apiStatus}`} title="VITAL service connection; this does not indicate that a watch is connected">{apiStatus === "online" ? "Backend online" : apiStatus === "offline" ? "Backend offline" : "Connecting to backend"}</span>
@@ -1375,6 +1403,7 @@ addTimelineEvent(
         ) : null}
         {tab === "medication" ? (
           <MedicationView
+            language={uiLanguage}
             logs={medicationLogs}
             markMedication={markMedication}
             score={medicationScore}
@@ -1385,6 +1414,7 @@ addTimelineEvent(
             setPrescriptionReviewed={(reviewed) => setPrescriptionPlan((current) => current ? { ...current, humanReviewed: reviewed } : current)}
             updatePrescriptionDoseTime={updatePrescriptionDoseTime}
             updatePrescriptionDose={updatePrescriptionDose}
+            removePrescriptionDose={removePrescriptionDose}
             onDoseTimeSaved={(dose, time) => addTimelineEvent("medication", "Medication time updated", `${dose.medication} · ${dose.dose} · scheduled for ${time}. Confirm this time against the prescription.`, "Schedule updated")}
             referenceImages={referenceImages}
           />
@@ -1394,6 +1424,7 @@ addTimelineEvent(
         {tab === "phoneConnection" ? <PhoneConnectionView consentConfirmed={cameraConsentConfirmed} setConsentConfirmed={setCameraConsentConfirmed} addTimelineEvent={addTimelineEvent} /> : null}
         {tab === "voice" ? (
           <VoiceView
+            language={uiLanguage}
             transcript={voiceTranscript}
             setTranscript={setVoiceTranscript}
             distress={voiceDistress}
@@ -1466,6 +1497,7 @@ addTimelineEvent(
         ) : null}
         <HealthNudge />
         <HealthAssistant
+          language={uiLanguage}
           age={profile.age}
           conditions={profile.condition}
           symptoms={symptoms}
@@ -1574,7 +1606,8 @@ async function encodeVoiceBlobAsWavBase64(blob: Blob) {
   }
 }
 
-function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescriptionPlan, onEmergency, onAppointment }: {
+function HealthAssistant({ language, age, conditions, symptoms, triage, vitals, prescriptionPlan, onEmergency, onAppointment }: {
+  language: VitalLanguage;
   age: number; conditions: string; symptoms: string; triage: TriageResponse; vitals: TriageVitals;
   prescriptionPlan: PrescriptionPlan | null; onEmergency: () => void; onAppointment: () => void;
 }) {
@@ -1585,7 +1618,12 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   const [voiceStatus, setVoiceStatus] = useState("");
   const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(true);
   const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
-  const welcome: AssistantMessage = { id: 1, role: "assistant", mode: "here to help", text: "Hi! 👋 I’m VITAL’s health assistant. What would you like help with?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] };
+  const welcomeByLanguage: Record<VitalLanguage, AssistantMessage> = {
+    en: { id: 1, role: "assistant", mode: "here to help", text: "Hi! 👋 I’m VITAL’s health assistant. What would you like help with?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] },
+    hi: { id: 1, role: "assistant", mode: "here to help", text: "नमस्ते! 👋 मैं VITAL का स्वास्थ्य सहायक हूँ। आपको किस बारे में मदद चाहिए?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] },
+    kn: { id: 1, role: "assistant", mode: "here to help", text: "ನಮಸ್ಕಾರ! 👋 ನಾನು VITAL ಆರೋಗ್ಯ ಸಹಾಯಕ. ನಿಮಗೆ ಯಾವ ಸಹಾಯ ಬೇಕು?", suggestions: ["Explain my triage result", "Show my latest readings", "Help me prepare for a doctor visit", "What can I do about a fever?"] }
+  };
+  const welcome = welcomeByLanguage[language];
   const [messages, setMessages] = useState<AssistantMessage[]>([welcome]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const voiceRepliesEnabledRef = useRef(true);
@@ -1593,6 +1631,10 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
   const voiceCaptureRef = useRef<{ stream: MediaStream; context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; silentGain: GainNode; recorder: MediaRecorder; chunks: Blob[]; frameId: number; startedAt: number; lastVoiceAt: number; speechDetected: boolean } | null>(null);
   const voiceAttemptRef = useRef(0);
   voiceRepliesEnabledRef.current = voiceRepliesEnabled;
+
+  useEffect(() => {
+    setMessages((current) => current.length === 1 && current[0].id === 1 ? [welcome] : current);
+  }, [language]);
 
   function stopSpeaking() {
     if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -1607,9 +1649,10 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     const spokenText = text.replace(/https?:\/\/\S+/g, "link omitted").replace(/\s+/g, " ").trim();
     if (!spokenText) return;
     const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.lang = "en-IN";
-    const preferredVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("en-in"))
-      ?? window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("en"));
+    const voiceLocale: Record<VitalLanguage, string> = { en: "en-IN", hi: "hi-IN", kn: "kn-IN" };
+    utterance.lang = voiceLocale[language];
+    const preferredVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().replace("_", "-") === voiceLocale[language].toLowerCase())
+      ?? window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith(language));
     if (preferredVoice) utterance.voice = preferredVoice;
     utterance.onstart = () => setVoiceStatus("Speaking VITAL’s reply…");
     utterance.onend = () => setVoiceStatus("");
@@ -1678,12 +1721,14 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
         capture.silentGain.disconnect();
         void capture.context.close();
         setListening(false);
-        setVoiceStatus("Transcribing on this computer…");
+        setVoiceStatus(language === "en"
+          ? "Transcribing on this computer…"
+          : "Transcribing on this computer… The first Hindi/Kannada voice use may download a local speech model once.");
         void (async () => {
           try {
             const recording = new Blob(capture.chunks, { type: recorder.mimeType || "audio/webm" });
             const audioBase64 = await encodeVoiceBlobAsWavBase64(recording);
-            const result = await transcribeAssistantVoice(audioBase64);
+            const result = await transcribeAssistantVoice(audioBase64, language);
             if (!result.transcription) {
               setVoiceStatus("No clear speech was detected. Try again closer to the microphone, or type your question.");
               return;
@@ -1775,7 +1820,7 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     if (!question || busy) return;
     voiceDraftRef.current = false;
     setDraft("");
-    if (/^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*$/i.test(question)) {
+    if (language === "en" && /^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening)(?:\s+there)?\s*[!.?]*\s*$/i.test(question)) {
       const now = Date.now();
       setMessages((items) => [...items,
         { id: now, role: "user", text: question },
@@ -1785,10 +1830,10 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     }
     setMessages((items) => [...items, { id: Date.now(), role: "user", text: question }]);
     setBusy(true);
-    const asksAboutTriage = /\b(triage|risk score|screening result|my result|risk factors|why am i at risk)\b/i.test(question);
-    const asksAboutReadings = /\b(readings?|my vitals?|pulse|heart rate|blood pressure|spo2|oxygen level|temperature|steps|sleep)\b/i.test(question);
-    const asksAboutMedicines = /\b(medicine|medication|dose|missed dose|prescription|pill|tablet)\b/i.test(question);
-    const asksAboutSymptoms = /\b(symptoms?|triage|risk score|screening result|my result|should i|what should i do|is it serious|emergency)\b/i.test(question);
+    const asksAboutTriage = /\b(triage|risk score|screening result|my result|risk factors|why am i at risk)\b|जाँच परिणाम|जांच परिणाम|जोखिम|स्क्रीनिंग|मेरा परिणाम|ಪರಿಶೀಲನಾ ಫಲಿತಾಂಶ|ಅಪಾಯ|ನನ್ನ ಫಲಿತಾಂಶ/i.test(question);
+    const asksAboutReadings = /\b(readings?|my vitals?|pulse|heart rate|blood pressure|spo2|oxygen level|temperature|steps|sleep)\b|माप|नवीनतम|धड़कन|ऑक्सीजन|ಮಾಪನ|ಇತ್ತೀಚಿನ|ಹೃದಯ ಬಡಿತ|ಆಮ್ಲಜನಕ/i.test(question);
+    const asksAboutMedicines = /\b(medicine|medication|dose|missed dose|prescription|pill|tablet)\b|दवा|दवाई|खुराक|नुस्खा|ಔಷಧ|ಡೋಸ್|ಔಷಧ ಚೀಟಿ/i.test(question);
+    const asksAboutSymptoms = /\b(symptoms?|triage|risk score|screening result|my result|should i|what should i do|is it serious|emergency)\b|लक्षण|दर्द|साँस|सांस|गंभीर|आपात|ಲಕ್ಷಣ|ನೋವು|ಉಸಿರಾಟ|ತುರ್ತು/i.test(question);
     const context: Record<string, string | number> = {
       ...(asksAboutSymptoms ? { age, conditions, symptoms } : {}),
       ...(asksAboutTriage ? {
@@ -1802,15 +1847,20 @@ function HealthAssistant({ age, conditions, symptoms, triage, vitals, prescripti
     };
     try {
       const history = messages.slice(-8).map(({ role, text }) => ({ role, text }));
-      const reply = await postHealthQuestion(question, context, history);
+      const reply = await postHealthQuestion(question, context, history, language);
       setMessages((items) => [...items, { id: Date.now() + 1, role: "assistant", text: reply.answer, mode: reply.mode, urgent: reply.urgent, suggestions: reply.suggestions }]);
       if (fromVoice && voiceRepliesEnabledRef.current) speakText(reply.answer);
     } catch {
+      const unavailableByLanguage: Record<VitalLanguage, string> = {
+        en: "VITAL could not reach its assistant service, so Ollama did not generate a reply. Check that the VITAL backend and Ollama are running, then try again.",
+        hi: "VITAL अपनी सहायक सेवा से जुड़ नहीं पाया, इसलिए Ollama ने जवाब नहीं दिया। VITAL बैकएंड और Ollama चालू हैं या नहीं जाँचें, फिर दोबारा कोशिश करें।",
+        kn: "VITAL ಸಹಾಯಕ ಸೇವೆಯನ್ನು ಸಂಪರ್ಕಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ, ಆದ್ದರಿಂದ Ollama ಉತ್ತರ ನೀಡಲಿಲ್ಲ. VITAL ಬ್ಯಾಕೆಂಡ್ ಮತ್ತು Ollama ಚಾಲನೆಯಲ್ಲಿವೆಯೇ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
+      };
       setMessages((items) => [...items, {
         id: Date.now() + 1,
         role: "assistant",
         mode: "assistant unavailable",
-        text: "VITAL could not reach its assistant service, so Ollama did not generate a reply. Check that the VITAL backend and Ollama are running, then try again."
+        text: unavailableByLanguage[language]
       }]);
     } finally {
       setBusy(false);
@@ -2648,6 +2698,7 @@ function CareGuidance({ state, symptoms = "", age }: { state: HealthState; sympt
 }
 
 function MedicationView({
+  language,
   logs,
   markMedication,
   score,
@@ -2658,9 +2709,11 @@ function MedicationView({
   setPrescriptionReviewed,
   updatePrescriptionDoseTime,
   updatePrescriptionDose,
+  removePrescriptionDose,
   onDoseTimeSaved,
   referenceImages
 }: {
+  language: VitalLanguage;
   logs: MedicationLog[];
   markMedication: (status: MedicationLog["status"], confidence: number, label?: string, doseKey?: string) => void;
   score: number;
@@ -2671,6 +2724,7 @@ function MedicationView({
   setPrescriptionReviewed: (reviewed: boolean) => void;
   updatePrescriptionDoseTime: (index: number, time: string) => void;
   updatePrescriptionDose: (index: number, field: keyof PrescriptionDose, value: string) => void;
+  removePrescriptionDose: (index: number) => void;
   onDoseTimeSaved: (dose: PrescriptionDose, time: string) => void;
   referenceImages: MedicationReferenceImage[];
 }) {
@@ -2684,6 +2738,10 @@ function MedicationView({
   const [stableFrames, setStableFrames] = useState(0);
   const verifiedCount = logs.filter(
   (log) => log.status === "Verified"
+).length;
+
+const witnessedCount = logs.filter(
+  (log) => log.status === "Witnessed"
 ).length;
 
 const missedCount = logs.filter(
@@ -2701,14 +2759,15 @@ const photoCheckedCount = logs.filter(
 const totalLogs = logs.length;
 const adherenceEventCount = logs.filter((log) => log.status !== "Photo checked").length;
 
-const averageConfidence = totalLogs
+const visualConfidenceLogs = logs.filter((log) => log.status === "Photo checked");
+const averageConfidence = visualConfidenceLogs.length
   ? Math.round(
-      logs.reduce((sum, log) => sum + log.confidence, 0) / totalLogs
+      visualConfidenceLogs.reduce((sum, log) => sum + log.confidence, 0) / visualConfidenceLogs.length
     )
   : null;
 
 const adherenceRate = adherenceEventCount
-  ? Math.round((verifiedCount / adherenceEventCount) * 100)
+  ? Math.round(((verifiedCount + witnessedCount) / adherenceEventCount) * 100)
   : 0;
   const [selectedDoseKey, setSelectedDoseKey] = useState("");
   const [visualProfiles, setVisualProfiles] = useStoredState<Record<string, MedicationVisualProfile>>("vital.medicationVisualProfiles.v1", {});
@@ -2736,6 +2795,20 @@ const adherenceRate = adherenceEventCount
     return { date, key: localDateInputValue(date) };
   });
   const cameraDoseKey = currentDue ? medicationDoseKey(currentDue.dose) : "";
+  function recordCaregiverWitness() {
+    if (!currentDue || !prescriptionPlan?.humanReviewed) return;
+    const prompts: Record<VitalLanguage, { name: string; confirm: (observer: string, medicine: string) => string }> = {
+      en: { name: "Caregiver name or initials (saved on this device only):", confirm: (observer, medicine) => `${observer} confirms they directly watched the user swallow ${medicine} with water. VITAL will save this as a caregiver report; it does not prove absorption. No video will be recorded. Continue?` },
+      hi: { name: "देखभालकर्ता का नाम या अक्षर (केवल इस डिवाइस पर सेव होगा):", confirm: (observer, medicine) => `${observer} पुष्टि करते हैं कि उन्होंने उपयोगकर्ता को ${medicine} पानी के साथ निगलते हुए सीधे देखा। VITAL इसे देखभालकर्ता की रिपोर्ट के रूप में सेव करेगा; इससे दवा का अवशोषण सिद्ध नहीं होता। कोई वीडियो रिकॉर्ड नहीं होगा। जारी रखें?` },
+      kn: { name: "ಆರೈಕೆದಾರರ ಹೆಸರು ಅಥವಾ ಮೊದಲಕ್ಷರಗಳು (ಈ ಸಾಧನದಲ್ಲೇ ಉಳಿಸಲಾಗುತ್ತದೆ):", confirm: (observer, medicine) => `${observer} ಅವರು ಬಳಕೆದಾರರು ${medicine} ಅನ್ನು ನೀರಿನೊಂದಿಗೆ ನುಂಗುವುದನ್ನು ನೇರವಾಗಿ ನೋಡಿದ್ದಾರೆ ಎಂದು ದೃಢಪಡಿಸುತ್ತಾರೆ. VITAL ಇದನ್ನು ಆರೈಕೆದಾರರ ವರದಿಯಾಗಿ ಉಳಿಸುತ್ತದೆ; ಔಷಧಿ ದೇಹದಲ್ಲಿ ಹೀರಿಕೊಳ್ಳಲಾಗಿದೆ ಎಂಬುದಕ್ಕೆ ಇದು ಪುರಾವೆಯಲ್ಲ. ಯಾವುದೇ ವೀಡಿಯೊ ರೆಕಾರ್ಡ್ ಆಗುವುದಿಲ್ಲ. ಮುಂದುವರಿಸಬೇಕೇ?` }
+    };
+    const prompt = prompts[language];
+    const observer = window.prompt(prompt.name)?.trim();
+    if (!observer) return;
+    const confirmed = window.confirm(prompt.confirm(observer, dueLabel));
+    if (!confirmed) return;
+    markMedication("Witnessed", 100, `${dueLabel} · caregiver report by ${observer}`, cameraDoseKey);
+  }
   const visualProfileKey = currentDue ? medicationProfileKey(currentDue.dose) : "";
   const activeVisualProfile = visualProfileKey ? visualProfiles[visualProfileKey] : undefined;
   const requiredReferenceSamples = 5;
@@ -2773,11 +2846,26 @@ const adherenceRate = adherenceEventCount
       setScanPhase("review");
       return;
     }
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+      } catch (cameraError) {
+        const errorName = cameraError instanceof DOMException ? cameraError.name : "";
+        // Laptop webcams do not expose an environment-facing camera. Retry
+        // without facing-mode/resolution constraints so any usable camera works.
+        if (!["OverconstrainedError", "NotFoundError"].includes(errorName)) throw cameraError;
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+      } else {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Camera preview is unavailable. Reopen the Medications page and try again.");
       }
       if (autoScan && (activeVisualProfile?.samples.length ?? 0) >= requiredReferenceSamples && (!currentDue || isDueWindow)) {
         setCameraState("Reference profile ready. Place one loose tablet inside the reticle.");
@@ -2787,8 +2875,19 @@ const adherenceRate = adherenceEventCount
         setScanPhase("idle");
       }
     } catch (error) {
-      const reason = error instanceof DOMException && error.name === "NotAllowedError" ? "Camera permission denied." : "Camera could not start.";
-      setCameraState(`${reason} Use Chrome/Brave or fallback verification buttons.`);
+      stream?.getTracks().forEach((track) => track.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
+      const errorName = error instanceof DOMException ? error.name : "";
+      const reason = errorName === "NotAllowedError"
+        ? "Camera permission denied. Allow camera access for this VITAL site in Brave settings."
+        : errorName === "NotReadableError"
+          ? "The camera is busy in another app. Close Camera/Teams/Zoom and try again."
+          : errorName === "NotFoundError"
+            ? "No camera was found. Connect or enable a webcam, then retry."
+            : errorName === "SecurityError"
+              ? "The browser blocked camera access. Open VITAL at http://127.0.0.1:5187 and allow camera access."
+              : `Camera could not start${errorName ? ` (${errorName})` : ""}. Check browser permission and close other apps using the camera.`;
+      setCameraState(`${reason} Manual confirmation is still available.`);
       setScanPhase("review");
     }
   }
@@ -3211,12 +3310,12 @@ const adherenceRate = adherenceEventCount
 
       <div className="med-adherence-summary">
         <span className="section-kicker">
-          DOSES MARKED TAKEN
+          DOSES REPORTED TAKEN
         </span>
 
-        <strong>{adherenceEventCount ? `${verifiedCount} / ${adherenceEventCount}` : "—"}</strong>
+        <strong>{adherenceEventCount ? `${verifiedCount + witnessedCount} / ${adherenceEventCount}` : "—"}</strong>
 
-        <p>prescribed dose check-ins</p>
+          <p>self-reports and caregiver witness reports</p>
       </div>
     </div>
 
@@ -3228,10 +3327,15 @@ const adherenceRate = adherenceEventCount
         </div>
 
         <div>
-          <span>Confirmed</span>
+          <span>Self-reported</span>
           <strong>{verifiedCount}</strong>
           <small>Marked taken by you</small>
         </div>
+      </div>
+
+      <div className="med-stat witnessed">
+        <div className="med-stat-icon"><ShieldCheck /></div>
+        <div><span>Caregiver witnessed</span><strong>{witnessedCount}</strong><small>Observer report; absorption not confirmed</small></div>
       </div>
 
       <div className="med-stat photo-checked">
@@ -3276,9 +3380,9 @@ const adherenceRate = adherenceEventCount
         </div>
 
         <div>
-          <span>Avg. confidence</span>
+          <span>Avg. visual match</span>
           <strong>{averageConfidence === null ? "—" : `${averageConfidence}%`}</strong>
-          <small>Verification confidence</small>
+          <small>Camera similarity only</small>
         </div>
       </div>
 
@@ -3298,7 +3402,7 @@ const adherenceRate = adherenceEventCount
       <div className="med-status-bars">
 
         <div className="med-status-row">
-          <span>Verified</span>
+          <span>Self-reported</span>
 
           <div className="med-status-track">
             <i
@@ -3310,6 +3414,12 @@ const adherenceRate = adherenceEventCount
           </div>
 
           <strong>{verifiedCount}</strong>
+        </div>
+
+        <div className="med-status-row">
+          <span>Caregiver witnessed</span>
+          <div className="med-status-track"><i className="witnessed" style={{ width: `${totalLogs ? (witnessedCount / totalLogs) * 100 : 0}%` }} /></div>
+          <strong>{witnessedCount}</strong>
         </div>
 
         <div className="med-status-row">
@@ -3358,7 +3468,7 @@ const adherenceRate = adherenceEventCount
 
   </div>
   <section className="dose-checkins" aria-label="Daily medication check-ins">
-    <div className="dose-checkins-heading"><div><span className="section-kicker">DAILY CHECK-IN</span><h3>Medication tracker</h3><p>A camera match fills a box automatically. It records a visual check, not proof that a dose was taken.</p></div><span className="dose-checkins-range">Last 7 days</span></div>
+    <div className="dose-checkins-heading"><div><span className="section-kicker">DAILY CHECK-IN</span><h3>Medication tracker</h3><p>A camera match is only a visual check. Self-reports and caregiver witness reports are recorded separately; none proves absorption.</p></div><span className="dose-checkins-range">Last 7 days</span></div>
     <div className="dose-checkins-scroll" role="region" aria-label="Seven day medication check grid" tabIndex={0}>
       <div className="dose-checkins-grid" style={{ "--dose-day-count": trackerDays.length } as CSSProperties}>
         <div className="dose-checkins-label"><strong>Scheduled dose</strong></div>
@@ -3369,9 +3479,9 @@ const adherenceRate = adherenceEventCount
             <div className="dose-checkins-label"><strong>{dose.medication}</strong><small>{dose.time}{dose.dose ? ` · ${dose.dose}` : " · daily"}</small></div>
             {trackerDays.map(({ key }) => {
               const record = statusByDayDose.get(`${key}|${doseKey}`);
-              const checked = record?.status === "Photo checked" || record?.status === "Verified";
+              const checked = record?.status === "Photo checked" || record?.status === "Verified" || record?.status === "Witnessed";
               const missed = record?.status === "Missed";
-              return <div className={`dose-check-cell ${checked ? "checked" : missed ? "missed" : record ? "pending" : ""}`} key={`${doseKey}-${key}`} role="img" aria-label={`${dose.medication} ${key}: ${checked ? record?.status === "Photo checked" ? "photo checked; dose not confirmed taken" : "marked taken" : missed ? "marked missed" : record ? "needs review" : "no check-in recorded"}`} title={checked ? record?.status === "Photo checked" ? "Photo match only · does not confirm the dose was taken" : "Marked taken" : missed ? "Marked missed" : record ? "Needs review" : "No check-in"}>
+              return <div className={`dose-check-cell ${checked ? "checked" : missed ? "missed" : record ? "pending" : ""}`} key={`${doseKey}-${key}`} role="img" aria-label={`${dose.medication} ${key}: ${checked ? record?.status === "Photo checked" ? "photo checked; dose not confirmed taken" : record?.status === "Witnessed" ? "caregiver reported observing a swallow; absorption not confirmed" : "self-reported taken" : missed ? "marked missed" : record ? "needs review" : "no check-in recorded"}`} title={checked ? record?.status === "Photo checked" ? "Photo match only · does not confirm the dose was taken" : record?.status === "Witnessed" ? "Caregiver reported observing a swallow · not proof of absorption" : "Self-reported taken" : missed ? "Marked missed" : record ? "Needs review" : "No check-in"}>
                 {checked ? <Check /> : missed ? <X /> : record ? <span>·</span> : null}
               </div>;
             })}
@@ -3379,7 +3489,7 @@ const adherenceRate = adherenceEventCount
         })}
       </div>
     </div>
-    <div className="dose-checkins-legend"><span><i className="checked" />Photo checked</span><span><i className="taken" />Marked taken</span><span><i className="missed" />Missed</span><span><i className="empty" />No check-in</span></div>
+    <div className="dose-checkins-legend"><span><i className="checked" />Photo checked</span><span><i className="taken" />Self-reported taken</span><span><i className="witnessed" />Caregiver witness report</span><span><i className="missed" />Missed</span><span><i className="empty" />No check-in</span></div>
     {!trackerDoses.length ? <p className="dose-checkins-hint">Analyze a prescription to display its prescribed medicines and dose check-ins here.</p> : null}
   </section>
 </Panel>
@@ -3435,6 +3545,16 @@ const adherenceRate = adherenceEventCount
                       }}
                     />
                   </label>
+                  <button
+                    type="button"
+                    className="prescription-dose-remove"
+                    aria-label={`Remove ${dose.medication} from prescription`}
+                    title="Remove this medicine from the prescription draft"
+                    onClick={() => removePrescriptionDose(index)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                    <span>Remove</span>
+                  </button>
                 </article>
               ))}
             </div>
@@ -3548,9 +3668,11 @@ const adherenceRate = adherenceEventCount
         {referenceImages.length ? <div className="reference-gallery"><div className="reference-gallery-title"><strong>Web reference candidates</strong><span>Openverse · manual confirmation required</span></div><div className="reference-thumbs">{referenceImages.slice(0, 4).map((image) => <a key={image.thumbnail} href={image.source} target="_blank" rel="noreferrer"><img src={image.thumbnail} alt={image.title} /><small>{image.license || "source"}</small></a>)}</div></div> : null}
         <div className="manual-checks">
           <button disabled={!currentDue || !prescriptionPlan?.humanReviewed} onClick={() => currentDue && markMedication("Verified", isDueWindow ? 94 : 91, dueLabel, cameraDoseKey)}><Check /> I took this dose</button>
+          <button className="witness-dose-button" disabled={!currentDue || !prescriptionPlan?.humanReviewed} onClick={recordCaregiverWitness}><ShieldCheck /> Caregiver witnessed swallow</button>
           <button disabled={!currentDue || !prescriptionPlan?.humanReviewed} onClick={() => currentDue && markMedication("Missed", 18, dueLabel, cameraDoseKey)}><X /> Dose missed</button>
           <button disabled={!currentDue || !prescriptionPlan?.humanReviewed} onClick={() => currentDue && markMedication("Pending", 52, dueLabel, cameraDoseKey)}><TimerReset /> Retry needed</button>
         </div>
+        <p className="caregiver-witness-note">A caregiver must be present and directly observe the swallow. VITAL records the caregiver’s report only; it does not record video or confirm absorption.</p>
       </Panel>
 </div>
   );
@@ -3561,6 +3683,7 @@ function ScanIcon() {
 }
 
 function VoiceView({
+  language,
   transcript,
   setTranscript,
   distress,
@@ -3568,6 +3691,7 @@ function VoiceView({
   checkRecorded,
   onAnalyze
 }: {
+  language: VitalLanguage;
   transcript: string;
   setTranscript: (value: string) => void;
   distress: boolean;
@@ -3597,7 +3721,11 @@ function VoiceView({
       return;
     }
     const lower = text.toLowerCase();
-    const riskTerms = ["help", "can't breathe", "cannot breathe", "shortness of breath", "pain", "emergency", "dizzy", "faint", "chest"];
+    const riskTerms = language === "hi"
+      ? ["मदद", "सांस नहीं", "साँस नहीं", "सांस लेने में कठिनाई", "सीने में दर्द", "बेहोश", "आपातकाल", "चक्कर", "खून बहना"]
+      : language === "kn"
+        ? ["ಸಹಾಯ", "ಉಸಿರಾಡಲು ಆಗುತ್ತಿಲ್ಲ", "ಉಸಿರಾಟದ ತೊಂದರೆ", "ಎದೆ ನೋವು", "ಪ್ರಜ್ಞೆ ತಪ್ಪಿ", "ತುರ್ತು", "ತಲೆಸುತ್ತು", "ರಕ್ತಸ್ರಾವ"]
+        : ["help", "can't breathe", "cannot breathe", "shortness of breath", "pain", "emergency", "dizzy", "faint", "chest"];
     const matches = riskTerms.filter((word) => lower.includes(word));
     const highRisk = matches.length > 0;
     const distressFlag = highRisk || volumeScore > 78;
@@ -3642,7 +3770,8 @@ function VoiceView({
       const recognition = new Recognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = "en-IN";
+      const recognitionLocale: Record<VitalLanguage, string> = { en: "en-IN", hi: "hi-IN", kn: "kn-IN" };
+      recognition.lang = recognitionLocale[language];
       recognition.onstart = () => {
         recognitionStartedRef.current = true;
         setSpeechStatus(`Listening on this device (${recognition.lang})… speak clearly; your words will appear here.`);
@@ -3663,8 +3792,8 @@ function VoiceView({
           "service-not-allowed": "The browser blocked its speech service. Check microphone permission or use the text box instead.",
           "no-speech": "No speech was detected. Check that the correct microphone is connected, then try again.",
           "audio-capture": "No microphone was found. Connect or enable a microphone, then try again.",
-          network: "The browser could not start speech recognition. VITAL requested on-device processing, so microphone audio is not sent to a speech service. Check that your browser supports local speech recognition and that its English language pack is installed.",
-          "language-not-supported": "This browser does not have the selected on-device English speech pack. Install an English speech pack in browser settings, then try again.",
+          network: "The browser could not start speech recognition. VITAL requested on-device processing, so microphone audio is not sent to a speech service. Check that your browser supports local speech recognition and that its selected language pack is installed.",
+          "language-not-supported": "This browser does not have the selected on-device speech pack. Install the chosen language pack in browser settings, then try again.",
           aborted: "Speech capture stopped. Select Start speech check to try again."
         };
         setSpeechStatus(messages[event.error] || `Speech recognition stopped (${event.error}). You can type in the text box instead.`);
@@ -3684,31 +3813,32 @@ function VoiceView({
           setSpeechStatus("This browser does not offer on-device speech recognition. Update to a browser with local speech packs, or use Windows voice typing (Win+H) while the transcript box is focused.");
           return;
         }
-        for (const language of ["en-IN", "en-US"]) {
+        const requestedLocale = ({ en: ["en-IN", "en-US"], hi: ["hi-IN"], kn: ["kn-IN"] } satisfies Record<VitalLanguage, string[]>)[language];
+        for (const locale of requestedLocale) {
           try {
             if (setupCancelledRef.current) return;
-            let availability = await Recognition.available({ langs: [language], processLocally: true, quality: "dictation" });
+            let availability = await Recognition.available({ langs: [locale], processLocally: true, quality: "dictation" });
             if (availability === "unavailable") continue;
             if (availability === "downloadable") {
-              setSpeechStatus(`Downloading the ${language} on-device speech pack. This is a one-time browser language-pack download; your microphone audio stays on this device.`);
-              const installed = await Recognition.install({ langs: [language], processLocally: true, quality: "dictation" });
+              setSpeechStatus(`Downloading the ${languageNames[language]} on-device speech pack. This is a one-time browser language-pack download; your microphone audio stays on this device.`);
+              const installed = await Recognition.install({ langs: [locale], processLocally: true, quality: "dictation" });
               if (setupCancelledRef.current) return;
               if (!installed) continue;
               availability = "available";
             }
             if (availability === "available") {
-              recognition.lang = language;
+              recognition.lang = locale;
               recognition.processLocally = true;
               recognitionStartedRef.current = true;
               recognition.start();
               return;
             }
           } catch {
-            // Try the next English locale; if neither exists, show a local-only fallback.
+            // Try the next locale; if none exists, show a local-only fallback.
           }
         }
         setListening(false);
-        setSpeechStatus("No on-device English speech pack is available. Update your browser and install its English language pack, or use Windows voice typing (Win+H) while the transcript box is focused.");
+        setSpeechStatus(`No on-device ${languageNames[language]} speech pack is available. Install that language pack in your browser or use the text box.`);
       })();
     } catch {
       setListening(false);
@@ -3834,7 +3964,7 @@ function PhoneConnectionView({ consentConfirmed, setConsentConfirmed, addTimelin
       <label className="camera-consent"><input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} /><span>I confirm the patient has agreed to this camera session, and a person will monitor the screen.</span></label>
       <div className="phone-pair-card">
         <div><strong>{status?.paired ? "Phone paired" : "Pair the VITAL app"}</strong><p>Keep the phone and computer on the same trusted Wi-Fi. Start VITAL with the phone-camera launcher, then enter a computer address and one-time code in the Android app.</p></div>
-        {status?.hostAddresses.length ? <div className="phone-host-list">{status.hostAddresses.map((host) => <code key={host}>http://{host}:5055</code>)}</div> : <p className="phone-camera-status">No local network address detected. Check that both devices are on Wi-Fi.</p>}
+        {status?.hostAddresses.length ? <div className="phone-host-list">{status.hostAddresses.map((host) => <code key={host}>http://{host}:5056</code>)}</div> : <p className="phone-camera-status">No local network address detected. Check that both devices are on Wi-Fi.</p>}
         {pairCode ? <div className="phone-pair-code"><span>PAIR CODE · expires {pairExpiresAt ? new Date(pairExpiresAt * 1000).toLocaleTimeString() : "soon"}</span><strong>{pairCode}</strong></div> : null}
         {consentConfirmed && status && !status.lanEnabled ? <p className="phone-camera-status">Phone access is off. Close this VITAL session and reopen <strong>START VITAL - PHONE CAMERA.cmd</strong>, then refresh this page.</p> : null}
         <ActionButton icon={<KeyRound />} onClick={() => void pairPhone()} disabled={busy || !consentConfirmed || status?.lanEnabled !== true}>{busy ? "Creating code…" : status?.lanEnabled !== true ? "Enable phone access to create code" : pairCode ? "Generate new pairing code" : "Create one-time pairing code"}</ActionButton>
@@ -4438,7 +4568,7 @@ function AnalyticsView({
   }));
   const riskLine = chartPoints.map((point) => `${point.x},${point.y}`).join(" ");
   const doseCounts = {
-    confirmed: medicationLogs.filter((log) => log.status === "Verified").length,
+    confirmed: medicationLogs.filter((log) => log.status === "Verified" || log.status === "Witnessed").length,
     photo: medicationLogs.filter((log) => log.status === "Photo checked").length,
     missed: medicationLogs.filter((log) => log.status === "Missed").length,
     pending: medicationLogs.filter((log) => log.status === "Pending").length
@@ -4473,9 +4603,9 @@ function AnalyticsView({
       </Panel>
       <Panel title="Medication check-in mix" kicker="saved records">
         <div className="dose-mix-layout">
-          <div className={`dose-mix-donut ${doseTotal ? "has-data" : ""}`} style={doseMixStyle} role="img" aria-label={`Medication records: ${doseCounts.confirmed} marked taken, ${doseCounts.photo} photo checked, ${doseCounts.missed} marked missed, ${doseCounts.pending} need review.`}><div><strong>{doseTotal}</strong><span>records</span></div></div>
+          <div className={`dose-mix-donut ${doseTotal ? "has-data" : ""}`} style={doseMixStyle} role="img" aria-label={`Medication records: ${doseCounts.confirmed} self-reported or caregiver-reported taken, ${doseCounts.photo} photo checked, ${doseCounts.missed} marked missed, ${doseCounts.pending} need review.`}><div><strong>{doseTotal}</strong><span>records</span></div></div>
           <div className="dose-mix-legend">
-            <span><i className="confirmed" />Marked taken <b>{doseCounts.confirmed}</b></span>
+            <span><i className="confirmed" />Taken reports <b>{doseCounts.confirmed}</b></span>
             <span><i className="photo" />Photo checked <b>{doseCounts.photo}</b></span>
             <span><i className="missed" />Marked missed <b>{doseCounts.missed}</b></span>
             <span><i className="pending" />Needs review <b>{doseCounts.pending}</b></span>
@@ -4901,6 +5031,7 @@ function ExportView({
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 10);
   const verifiedDoses = medicationLogs.filter((item) => item.status === "Verified").length;
+  const witnessedDoses = medicationLogs.filter((item) => item.status === "Witnessed").length;
   const photoCheckedDoses = medicationLogs.filter((item) => item.status === "Photo checked").length;
   const missedDoses = medicationLogs.filter((item) => item.status === "Missed").length;
   const pendingDoses = medicationLogs.filter((item) => item.status === "Pending").length;
@@ -4973,9 +5104,10 @@ function ExportView({
 
         <section className="report-print-section">
           <div className="report-section-title"><span>04</span><h2>Medication check-ins</h2></div>
-          <div className="report-medication-summary"><strong>{medicationLogs.length ? `${medicationScore}%` : "No data"}</strong><span>{medicationLogs.length ? "recorded check-in proportion" : "No dose check-ins recorded"}</span><div><b>{verifiedDoses}</b> marked taken <b>{photoCheckedDoses}</b> photo checked <b>{missedDoses}</b> missed <b>{pendingDoses}</b> need review</div></div>
+          <div className="report-medication-summary"><strong>{medicationLogs.length ? `${medicationScore}%` : "No data"}</strong><span>{medicationLogs.length ? "recorded check-in proportion" : "No dose check-ins recorded"}</span><div><b>{verifiedDoses}</b> self-reported taken <b>{witnessedDoses}</b> caregiver witness reports <b>{photoCheckedDoses}</b> photo checked <b>{missedDoses}</b> missed <b>{pendingDoses}</b> need review</div></div>
           {prescriptionPlan?.doses?.length ? <div className="report-schedule-list"><h3>Recorded schedule · check against your prescription</h3>{prescriptionPlan.doses.map((dose, index) => <div key={`${dose.time}-${dose.medication}-${index}`}><time>{dose.time}</time><strong>{dose.medication}</strong><span>{dose.dose} · {dose.instructions}</span></div>)}</div> : null}
-          <div className="report-medication-list">{medicationLogs.slice(0, 10).map((item) => <div key={item.id}><time>{item.dateKey || "Date not recorded"} · {item.time}</time><strong>{item.label}</strong><span className={`report-status ${item.status === "Photo checked" ? "photo" : item.status === "Verified" ? "confirmed" : item.status === "Missed" ? "missed" : "pending"}`}>{item.status}</span></div>)}</div>
+          <div className="report-medication-list">{medicationLogs.slice(0, 10).map((item) => <div key={item.id}><time>{item.dateKey || "Date not recorded"} · {item.time}</time><strong>{item.label}</strong><span className={`report-status ${item.status === "Photo checked" ? "photo" : item.status === "Verified" || item.status === "Witnessed" ? "confirmed" : item.status === "Missed" ? "missed" : "pending"}`}>{item.status === "Verified" ? "Self-reported" : item.status === "Witnessed" ? "Caregiver witnessed" : item.status}</span></div>)}</div>
+          {witnessedDoses ? <p className="report-small-note">Caregiver witness entries are local observer reports, not proof of medicine absorption. VITAL does not store dose videos.</p> : null}
           {photoCheckedDoses ? <p className="report-small-note">A photo check records a visual tablet match only. It does not confirm that the dose was taken.</p> : null}
         </section>
 

@@ -456,7 +456,7 @@ def build_pptx(assets: dict[str, Path]) -> Path:
         ("Emergency Simulation", "10-second cancellation and audit trail", []),
         ("Publication Path", None, ["Immediate: HOD demo + IEEE-format applied conference paper", "Do not claim IEEE/Scopus indexing until official DOI/indexing appears", "Journal path needs public raw dataset validation and ethics planning"]),
         ("Final Demo Checklist", None, ["npm run build passed", "Backend evidence endpoint passed", "Playwright desktop/mobile QA passed", "Final report, paper, PDF, and PPT regenerated"]),
-        ("Thank You", "Questions", ["Demo URL: http://127.0.0.1:5173", "Backend API: http://127.0.0.1:5055"]),
+        ("Thank You", "Questions", ["Demo URL: http://127.0.0.1:5173", "Backend API: http://127.0.0.1:5056"]),
     ]
     image_slide = {
         2: assets["architecture"],
