@@ -3531,7 +3531,7 @@ select:focus {
 .guidance-source { margin: 0.75rem 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
 .guidance-source a { color: var(--teal-dark); font-weight: 750; }
 
-/* Rotating public-health nudges on the patient dashboard. */
+/* Static daily public-health nudge in the page flow. */
 .health-nudge { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 1rem; align-items: center; margin-top: 1rem; padding: 1rem 1.15rem; border: 1px solid color-mix(in srgb, var(--teal) 24%, var(--line)); border-radius: 1rem; background: linear-gradient(110deg, color-mix(in srgb, var(--mint) 24%, var(--panel-strong)), var(--panel) 65%); box-shadow: 0 6px 20px rgba(16, 40, 38, .045); }
 .health-nudge-icon { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: .95rem; background: color-mix(in srgb, var(--mint) 25%, var(--panel)); color: var(--teal-dark); }
 .health-nudge-icon svg { width: 1.4rem; height: 1.4rem; }
@@ -3546,20 +3546,9 @@ select:focus {
 .health-tip-time-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .8rem; align-items: center; padding: .8rem .9rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--panel-strong); color: var(--ink); font-size: .82rem; font-weight: 800; }
 .health-tip-time-setting input { min-height: 2.4rem; padding: .35rem .55rem; border: 1px solid var(--line); border-radius: .6rem; background: var(--panel); color: var(--ink); font: inherit; }
 .health-tip-time-setting small { grid-column: 1 / -1; color: var(--muted); font-size: .71rem; font-weight: 500; line-height: 1.4; }
-.health-nudge-controls { display: grid; justify-items: end; gap: .45rem; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
-.health-nudge-controls > div { display: flex; gap: .3rem; }
-.health-nudge-controls button { display: grid; place-items: center; width: 2.15rem; height: 2.15rem; border: 1px solid var(--line); border-radius: .7rem; background: var(--panel-strong); color: var(--ink); cursor: pointer; transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease; }
-.health-nudge-controls button:hover { border-color: var(--teal); background: color-mix(in srgb, var(--mint) 16%, var(--panel-strong)); }
-.health-nudge-controls button:active { transform: scale(.94); }
-.health-nudge-controls button:focus-visible { outline: 3px solid color-mix(in srgb, var(--teal) 40%, transparent); outline-offset: 2px; }
-.health-nudge-controls button svg { width: 1rem; height: 1rem; }
 @media (max-width: 640px) {
   .health-nudge { grid-template-columns: auto minmax(0, 1fr); gap: .75rem; padding: .85rem; }
   .health-nudge-icon { width: 2.5rem; height: 2.5rem; }
-  .health-nudge-controls { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; width: 100%; padding-left: 3.25rem; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .health-nudge-controls button { transition: none; }
 }
 
 @media (max-width: 820px) {
@@ -4416,26 +4405,6 @@ button:disabled {
 .dashboard-glance article:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--line) 56%, var(--teal)); box-shadow: 0 8px 18px rgba(8, 38, 42, .07); }
 .attention-item, .dashboard-recent-events article, .analytics-summary-card { box-shadow: 0 3px 12px rgba(8, 38, 42, .035); }
 .health-nudge { box-shadow: 0 8px 24px rgba(9, 36, 43, .05); }
-.health-nudge {
-  position: fixed;
-  z-index: 900;
-  right: 10.5rem;
-  bottom: max(1rem, env(safe-area-inset-bottom));
-  left: calc(17rem + 1.25rem);
-  width: auto;
-  max-width: 68rem;
-  margin: 0 auto;
-  box-shadow: 0 12px 36px rgba(3, 20, 28, .22);
-  backdrop-filter: blur(16px);
-}
-.main { padding-bottom: 10rem; }
-@media (max-width: 1100px) {
-  .health-nudge { right: 10rem; left: 1rem; }
-}
-@media (max-width: 540px) {
-  .health-nudge { right: .7rem; bottom: max(4.25rem, calc(env(safe-area-inset-bottom) + 3.5rem)); left: .7rem; }
-  .main { padding-bottom: 12rem; }
-}
 .phone-connection-status { cursor: pointer; font: inherit; }
 .phone-connection-status.online { border-color: #2e9b68; background: #e6f8ee; color: #135d38; }
 .phone-connection-status.stale { border-color: #b7862a; background: #fff7df; color: #76520b; }

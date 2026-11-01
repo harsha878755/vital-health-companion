@@ -24,7 +24,6 @@ import {
   MessageCircle,
   Mic,
   Moon,
-  Pause,
   PhoneCall,
   Pill,
   Play,
@@ -2041,7 +2040,6 @@ const healthNudges = [
 
 function HealthNudge() {
   const [activeIndex, setActiveIndex] = useState(() => new Date().getDate() % healthNudges.length);
-  const [paused, setPaused] = useState(false);
   const activeNudge = healthNudges[activeIndex];
   const topicIcon = activeNudge.category === "MOVE MORE" ? <Activity />
     : activeNudge.category === "EAT VARIETY" ? <Apple />
@@ -2053,16 +2051,6 @@ function HealthNudge() {
     : activeNudge.category === "MEDICINES" ? <Pill />
     : <ShieldCheck />;
 
-  useEffect(() => {
-    if (paused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden) setActiveIndex((index) => (index + 1) % healthNudges.length);
-    }, 9000);
-    return () => window.clearInterval(timer);
-  }, [paused]);
-
-  const move = (direction: number) => setActiveIndex((index) => (index + direction + healthNudges.length) % healthNudges.length);
-
   return <section className="health-nudge" aria-label="Everyday health precautions">
     <div className="health-nudge-icon" aria-hidden="true">{topicIcon}</div>
     <div className="health-nudge-content" aria-live="polite" aria-atomic="true">
@@ -2070,14 +2058,6 @@ function HealthNudge() {
       <h2>{activeNudge.slogan}</h2>
       <p>{activeNudge.detail}</p>
       <a href={activeNudge.href} target="_blank" rel="noreferrer">{activeNudge.source}<ChevronRight aria-hidden="true" /></a>
-    </div>
-    <div className="health-nudge-controls" aria-label="Health nudge controls">
-      <span>{activeIndex + 1} / {healthNudges.length}</span>
-      <div>
-        <button type="button" onClick={() => move(-1)} aria-label="Previous health nudge"><ChevronLeft /></button>
-        <button type="button" onClick={() => setPaused((value) => !value)} aria-label={paused ? "Resume automatic health nudges" : "Pause automatic health nudges"} title={paused ? "Resume rotation" : "Pause rotation"}>{paused ? <Play /> : <Pause />}</button>
-        <button type="button" onClick={() => move(1)} aria-label="Next health nudge"><ChevronRight /></button>
-      </div>
     </div>
   </section>
 }
